@@ -47,7 +47,9 @@ jobs:
 
           $env:LIB = "$env:VULKAN_SDK\Lib;$env:LIB"
 
-          if (Test-Path "Cargo.lock") {
+          if (Test-Path "crates/game/Cargo.toml") {
+            cargo build --release --locked -p rustcraft-game
+          } elseif (Test-Path "Cargo.lock") {
             cargo build --release --locked
           } else {
             Write-Warning "Cargo.lock was not found. Building without --locked."
@@ -383,7 +385,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ -f "Cargo.lock" ]]; then
+          if [[ -f "crates/game/Cargo.toml" ]]; then
+            cargo build --release --locked -p rustcraft-game
+          elif [[ -f "Cargo.lock" ]]; then
             cargo build --release --locked
           else
             echo "::warning::Cargo.lock was not found. Building without --locked."
