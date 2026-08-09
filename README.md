@@ -225,7 +225,7 @@ RustCraft-Public/
 │   ├── indexes/
 │   ├── objects/
 │   └── ...
-├── src/
+├── crates/
 ├── Cargo.toml
 └── Cargo.lock
 ```
@@ -415,7 +415,7 @@ Current development focuses on:
 
 - Improving rendering correctness
 
-- Optimizing Vulkan performance
+- Optimizing Vulkan and Direct3D 12 performance
 
 - Improving Minecraft 1.8.9 compatibility
 

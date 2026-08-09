@@ -1,7 +1,7 @@
 # RustCraft
 
 [![Rust](https://img.shields.io/badge/Rust-2021-orange?logo=rust)](https://www.rust-lang.org/)
-[![Vulkan](https://img.shields.io/badge/Renderer-Vulkan-blue)](#)
+[![Renderer](https://img.shields.io/badge/Renderer-Vulkan%20%7C%20Direct3D%2012-blue)](#)
 [![Protocol](https://img.shields.io/badge/Minecraft-1.8.9%20(protocol%2047)-green)](#)
 [![Build](https://img.shields.io/badge/Build-Cargo-informational)](#)
 
@@ -17,20 +17,24 @@
  </picture>
 </a>
 
-> 一个使用 Rust 从零重新实现、基于 Vulkan 渲染器的 Minecraft 1.8.9 客户端。
+> 一个使用 Rust 从零重新实现、支持 Vulkan 与 Direct3D 12 渲染器的 Minecraft 1.8.9 客户端。
 
-RustCraft 是一个实验性的 **Minecraft Java Edition 1.8.9 客户端重新实现项目**，主要使用 **Rust 2021** 编写，并采用自研的 **Vulkan** 渲染引擎。
+RustCraft 是一个实验性的 **Minecraft Java Edition 1.8.9 客户端重新实现项目**，主要使用 **Rust 2021** 编写，并采用后端无关的渲染架构。Vulkan 是默认后端，Windows 上也支持 Direct3D 12。
 
 RustCraft 的目标是探索使用现代系统编程语言、显式图形 API 和模块化架构重新构建 Minecraft 兼容客户端的可能性，同时注重性能、可扩展性和现代化的渲染架构。
 
-> [!NOTE]  
+> [!NOTE]
 > RustCraft 目前仍处于积极开发阶段。许多功能仍为实验性功能、尚未完成，或可能在未来发生较大变化。
 
 ## 功能特性
 
 - 主要使用 Rust 2021 编写
 
-- 自研 Vulkan 渲染引擎
+- 自研 Vulkan 与 Direct3D 12 渲染引擎
+
+- Windows 上支持 Direct3D 12，并在初始化失败时回退到 Vulkan
+
+- GPU-local 静态资源、异步 staging 上传以及相邻区块合批
 
 - 支持 Minecraft 1.8.9 Protocol 47
 
@@ -66,7 +70,7 @@ RustCraft 主要使用以下技术：
 
 - **Rust 2021** — 核心客户端与引擎实现
 
-- **Vulkan** — 底层图形渲染
+- **Vulkan 与 Direct3D 12** — 底层图形渲染后端
 
 - **Lua** — 客户端脚本与 Modding
 
@@ -86,7 +90,9 @@ RustCraft 不分发 Minecraft 原版资源。用户必须从自己合法获取�
 RustCraft-Public/
 ├── assets/
 │   └── 仅包含 RustCraft 自有资源
-├── src/
+├── crates/
+│   ├── game/                # 客户端、世界、实体、GUI 与游戏系统
+│   └── renderer/            # 后端无关渲染器以及 Vulkan/D3D12 后端
 ├── Cargo.lock
 ├── Cargo.toml
 ├── LICENSE
@@ -108,6 +114,8 @@ Minecraft 原版 assets、缓存资源、下载的游戏文件、纹理、语言
 
 - 支持 Vulkan 的 GPU
 
+- Windows 上支持 Direct3D 12 的 GPU（可选）
+
 - 最新的显卡驱动
 
 - Vulkan 开发库或 Vulkan SDK
@@ -117,7 +125,7 @@ Minecraft 原版 assets、缓存资源、下载的游戏文件、纹理、语言
 克隆仓库：
 
 ```
-git clone https://github.com/YOUR_USERNAME/RustCraft-Public.git
+git clone https://github.com/RustCraftMC/RustCraft-Public.git
 cd RustCraft-Public
 ```
 
@@ -217,12 +225,12 @@ RustCraft-Public/
 │   ├── indexes/
 │   ├── objects/
 │   └── ...
-├── src/
+├── crates/
 ├── Cargo.toml
 └── Cargo.lock
 ```
 
-> [!IMPORTANT]  
+> [!IMPORTANT]
 > 请不要从非官方的第三方镜像下载 Minecraft 原版 Assets。请使用你自己的 Minecraft 官方安装中由官方启动器下载的文件。
 
 ### 2. 从 Minecraft 1.8.9 JAR 中提取资源
@@ -313,6 +321,17 @@ rustcraft.exe
 
 - RustCraft 是否能够从当前工作目录访问 `assets` 目录
 
+## 渲染后端
+
+Vulkan 是默认渲染后端。Windows 上可以通过环境变量选择 Direct3D 12：
+
+```powershell
+$env:RUSTCRAFT_RENDER_BACKEND="dx12"
+cargo run
+```
+
+如果 Direct3D 12 初始化失败，RustCraft 会记录原因并自动回退到 Vulkan。当前渲染器使用 GPU-local 静态资源、异步 staging 上传，并将相邻区块合批以减少 CPU 提交开销。
+
 ## 资源包
 
 RustCraft 支持 Minecraft 资源包。
@@ -329,7 +348,7 @@ Minecraft 原版资源包以及 Minecraft 原版 Assets 不会作为 RustCraft �
 
 ## Shader Packs
 
-> [!WARNING]  
+> [!WARNING]
 > Shader Pack 支持目前仍处于 **开发中（Work in Progress）**。
 
 RustCraft 正在尝试通过自研的 Vulkan 渲染管线实现 Shader Pack 支持。
@@ -393,7 +412,7 @@ RustCraft 是一个实验性项目，目前尚未达到生产环境可用状态�
 
 - 提高渲染正确性
 
-- 优化 Vulkan 渲染性能
+- 优化 Vulkan 与 Direct3D 12 渲染性能
 
 - 提升 Minecraft 1.8.9 兼容性
 
