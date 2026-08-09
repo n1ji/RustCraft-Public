@@ -645,6 +645,40 @@ impl<D: RenderDevice> GameRenderer<D> {
         } else {
             (display_width, display_height)
         };
+
+        // Acquire before writing any per-frame upload buffers. Both real
+        // backends wait for the reusable frame slot here; doing it after the
+        // world/entity/GUI sync allowed the CPU to overwrite a uniform buffer
+        // while the previous submission was still reading it.
+        let acquire_started = Instant::now();
+        let surface_frame = if self.runtime.capabilities().supports_present {
+            let mut config = SurfaceConfig::new(
+                Extent2D::new(display_width, display_height),
+                TextureFormat::B8G8R8A8Srgb,
+            );
+            // The client-side framerate policy is handled by the event loop;
+            // FIFO here would cap every 1000-FPS/unlimited configuration at
+            // the monitor refresh rate before the software limiter runs.
+            config.vsync = false;
+            if let Err(error) = self.runtime.device().configure_surface(config) {
+                log::error!("failed to configure RHI surface: {error}");
+                return;
+            }
+            match self.runtime.device().acquire_surface_frame() {
+                Ok(frame) => Some(frame),
+                Err(error) => {
+                    log::error!("failed to acquire RHI surface frame: {error}");
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        self.frame.frame_acquire_us = acquire_started.elapsed().as_micros() as u64;
+        // The acquire path is where the reusable frame-slot fence is waited;
+        // expose that wait in the existing "fence" diagnostic field.
+        self.frame.frame_gpu_us = self.frame.frame_acquire_us;
+
         let gui_started = Instant::now();
         let mouse = [self.gui.mouse_x, self.gui.mouse_y];
         let pointer_changed = self.gui_build_mouse != mouse;
@@ -733,35 +767,6 @@ impl<D: RenderDevice> GameRenderer<D> {
             log::error!("failed to upload GUI batches through RHI: {error}");
         }
         self.frame.frame_gui_us = gui_started.elapsed().as_micros() as u64;
-
-        let acquire_started = Instant::now();
-        let surface_frame = if self.runtime.capabilities().supports_present {
-            let mut config = SurfaceConfig::new(
-                Extent2D::new(display_width, display_height),
-                TextureFormat::B8G8R8A8Srgb,
-            );
-            // The client-side framerate policy is handled by the event loop;
-            // FIFO here would cap every 1000-FPS/unlimited configuration at
-            // the monitor refresh rate before the software limiter runs.
-            config.vsync = false;
-            if let Err(error) = self.runtime.device().configure_surface(config) {
-                log::error!("failed to configure RHI surface: {error}");
-                return;
-            }
-            match self.runtime.device().acquire_surface_frame() {
-                Ok(frame) => Some(frame),
-                Err(error) => {
-                    log::error!("failed to acquire RHI surface frame: {error}");
-                    return;
-                }
-            }
-        } else {
-            None
-        };
-        self.frame.frame_acquire_us = acquire_started.elapsed().as_micros() as u64;
-        // The acquire path is where the reusable frame-slot fence is waited;
-        // expose that wait in the existing "fence" diagnostic field.
-        self.frame.frame_gpu_us = self.frame.frame_acquire_us;
 
         let command_started = Instant::now();
         let prepared = self.prepare_frame(FrameInputs {

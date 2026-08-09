@@ -1,297 +1,466 @@
-<div align="center">
-
-# ⛏️ RustCraft
-
-### A Minecraft 1.8.9 client clone written in Rust  
-### 使用 Rust 编写的 Minecraft 1.8.9 客户端复刻
+# RustCraft
 
 [![Rust](https://img.shields.io/badge/Rust-2021-orange?logo=rust)](https://www.rust-lang.org/)
-[![Vulkan](https://img.shields.io/badge/Renderer-Vulkan-blue)](#)
+[![Renderer](https://img.shields.io/badge/Renderer-Vulkan%20%7C%20Direct3D%2012-blue)](#)
 [![Protocol](https://img.shields.io/badge/Minecraft-1.8.9%20(protocol%2047)-green)](#)
 [![Build](https://img.shields.io/badge/Build-Cargo-informational)](#)
 
-</div>
+**English** | [简体中文](README_ZH.md)
 
----
+## Star History
 
-## 🌐 Navigation | 导航
+<a href="https://www.star-history.com/?repos=RustCraftMC%2FRustCraft-Public&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=RustCraftMC/RustCraft-Public&type=date&theme=dark&legend=top-left&sealed_token=grGCoVN8LZatfwjgJlrVzd7-9Te6P94gd4VFAcvN-nSB2CeJDFhton4LyL0svRIo6uEL8_j1zTlMVynfQcrdcvGO66C1fW55YBdXpWu_vZ4dmJDyosTWP1Wt1lYf3gsGf9-SjCMoBoCJj7SgGRU_RN0ZKcC2YcO7jIbBZ6uaW3RAsMsy9-K8XIXHpCqG" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=RustCraftMC/RustCraft-Public&type=date&legend=top-left&sealed_token=grGCoVN8LZatfwjgJlrVzd7-9Te6P94gd4VFAcvN-nSB2CeJDFhton4LyL0svRIo6uEL8_j1zTlMVynfQcrdcvGO66C1fW55YBdXpWu_vZ4dmJDyosTWP1Wt1lYf3gsGf9-SjCMoBoCJj7SgGRU_RN0ZKcC2YcO7jIbBZ6uaW3RAsMsy9-K8XIXHpCqG" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=RustCraftMC/RustCraft-Public&type=date&legend=top-left&sealed_token=grGCoVN8LZatfwjgJlrVzd7-9Te6P94gd4VFAcvN-nSB2CeJDFhton4LyL0svRIo6uEL8_j1zTlMVynfQcrdcvGO66C1fW55YBdXpWu_vZ4dmJDyosTWP1Wt1lYf3gsGf9-SjCMoBoCJj7SgGRU_RN0ZKcC2YcO7jIbBZ6uaW3RAsMsy9-K8XIXHpCqG" />
+ </picture>
+</a>
 
-- [🇬🇧 English](#english)
-  - [Overview](#overview)
-  - [Features](#features)
-  - [Build & Run](#build--run)
-  - [Project Structure](#project-structure)
-  - [Key Dependencies](#key-dependencies)
-  - [Notes](#notes)
-- [🇨🇳 中文](#中文)
-  - [项目简介](#项目简介)
-  - [功能特性](#功能特性)
-  - [构建与运行](#构建与运行)
-  - [项目结构](#项目结构-1)
-  - [关键依赖](#关键依赖)
-  - [说明](#说明)
-- [Contributing / 贡献](#contributing--贡献)
-- [Disclaimer / 免责声明](#disclaimer--免责声明)
+> A Minecraft 1.8.9 client reimplementation built from scratch in Rust with Vulkan and Direct3D 12 renderers.
 
----
+RustCraft is an experimental reimplementation of the **Minecraft Java Edition 1.8.9 client**, written primarily in **Rust 2021** and powered by a backend-neutral rendering architecture. Vulkan remains the default renderer, while Direct3D 12 is available on Windows.
 
-## English
+The goal of RustCraft is to explore a modern approach to building a Minecraft-compatible client using Rust, explicit graphics APIs, and a modular architecture designed with performance and extensibility in mind.
 
-### Overview
+> [!NOTE]
+> RustCraft is under active development. Many features are experimental, incomplete, or subject to change.
 
-**RustCraft** is a Minecraft **1.8.9** client clone implemented in **Rust**.  
-It can connect to real Minecraft servers using **protocol version 47**, render the world with a **Vulkan** backend, and supports **Microsoft/Xbox Live OAuth authentication**.
+## Features
 
-> The `minecraft/` directory contains decompiled Minecraft 1.8.9 Java source for reference.
+- Written primarily in Rust 2021
 
----
+- Custom Vulkan-based rendering engine
 
-### Features
+- Direct3D 12 renderer for Windows with Vulkan fallback
 
-- ✅ Minecraft 1.8.9 protocol networking (`net/`)
-- ✅ Vulkan-based rendering pipeline (`render/`)
-- ✅ Microsoft/Xbox authentication (`auth/`)
-- ✅ World/chunk/block/entity systems
-- ✅ Asset pipeline (textures/models/resource packs/skins/sounds)
-- ✅ In-game UI, HUD, and menu systems
-- ✅ Audio playback via `rodio`
+- GPU-local static buffers, asynchronous staging uploads, and coarse chunk batching
 
----
+- Minecraft 1.8.9 protocol 47 support
 
-### Build & Run
+- World and chunk rendering
 
-```bash
-# Build (debug, opt-level=1)
-cargo build
+- Block and entity rendering
 
-# Release build (LTO thin, panic=abort, stripped)
-cargo build --release
+- Multiplayer server connectivity
 
-# Run (launches the game)
-cargo run
+- Microsoft account authentication
 
-# Run tests
-cargo test
+- Resource pack support
 
-# Lint
-cargo clippy
+- Custom UI system
 
-# Format
-cargo fmt -- --check
+- Audio system
+
+- Client-side Lua scripting and modding
+
+- Modular game and rendering architecture
+
+- Windows and Linux support
+
+- Automated builds with GitHub Actions
+
+- Linux AppImage packaging
+
+- Shader pack support — **Work in Progress**
+
+## Technology
+
+RustCraft is primarily built with:
+
+- **Rust 2021** — Core client and engine implementation
+
+- **Vulkan and Direct3D 12** — Low-level graphics rendering backends
+
+- **Lua** — Client-side scripting and modding
+
+- **Cargo** — Dependency management and build system
+
+- **Minecraft Protocol 47** — Minecraft Java Edition 1.8.9 networking
+
+RustCraft does not use the original Minecraft Java client as its runtime. Core client, game, networking, and rendering systems are independently implemented in Rust.
+
+Minecraft-owned resources are not distributed with RustCraft. Users must provide the required resources from their own legally obtained Minecraft installation.
+
+## Project Structure
+
+The public repository contains the RustCraft source code and project-owned resources required for development.
+
+```
+RustCraft-Public/
+├── assets/
+│   └── RustCraft-owned resources only
+├── crates/
+│   ├── game/                # Client, world, entities, GUI and gameplay systems
+│   └── renderer/            # Backend-neutral renderer plus Vulkan/D3D12 backends
+├── Cargo.lock
+├── Cargo.toml
+├── LICENSE
+├── README.md
+└── README_ZH.md
 ```
 
----
+Minecraft-owned assets, cached resources, downloaded game files, textures, language files, and other third-party copyrighted content are intentionally excluded from the public repository.
 
-### Render Backends
+## Building
 
-Vulkan remains the default renderer. On Windows, Direct3D 12 can be selected
-with the `RUSTCRAFT_RENDER_BACKEND` environment variable:
+### Requirements
+
+To build RustCraft, you will need:
+
+- A recent stable Rust toolchain
+
+- Cargo
+
+- A Vulkan-compatible GPU
+
+- A Direct3D 12-capable GPU on Windows (optional)
+
+- Up-to-date graphics drivers
+
+- Vulkan development libraries or the Vulkan SDK
+
+- A legally obtained installation of Minecraft Java Edition 1.8.9
+
+Clone the repository:
+
+```
+git clone https://github.com/RustCraftMC/RustCraft-Public.git
+cd RustCraft-Public
+```
+
+Build the release version:
+
+```
+cargo build --release --locked
+```
+
+The compiled executable will be available at:
+
+Windows:
+
+```
+target/release/rustcraft.exe
+```
+
+Linux:
+
+```
+target/release/rustcraft
+```
+
+## Preparing Minecraft Assets
+
+RustCraft requires Minecraft's original game assets and resources in order to start and render the game correctly.
+
+For copyright and licensing reasons, these files are **not included** in the RustCraft repository or release packages.
+
+You must obtain them from your own legally installed copy of Minecraft Java Edition.
+
+There are two types of Minecraft resources that need to be prepared:
+
+1. Assets downloaded and managed by the official Minecraft Launcher
+
+2. Resources contained inside the Minecraft 1.8.9 client JAR
+
+### 1. Copy the Official Launcher Assets
+
+First, install and launch **Minecraft Java Edition 1.8.9** at least once using the official Minecraft Launcher.
+
+This ensures that the required asset indexes and object files are downloaded.
+
+Locate your Minecraft installation directory.
+
+On Windows:
+
+```
+%APPDATA%\.minecraft
+```
+
+On Linux:
+
+```
+~/.minecraft
+```
+
+On macOS:
+
+```
+~/Library/Application Support/minecraft
+```
+
+Inside the Minecraft directory, locate:
+
+```
+assets/
+```
+
+The directory normally contains files and directories such as:
+
+```
+assets/
+├── indexes/
+├── objects/
+└── ...
+```
+
+Copy the required contents from this `assets` directory into the `assets` directory used by RustCraft.
+
+For a prebuilt Windows release, the resulting layout should look similar to:
+
+```
+RustCraft/
+├── rustcraft.exe
+└── assets/
+    ├── indexes/
+    ├── objects/
+    └── ...
+```
+
+When running RustCraft from source, place the required assets in the repository's `assets` directory:
+
+```
+RustCraft-Public/
+├── assets/
+│   ├── indexes/
+│   ├── objects/
+│   └── ...
+├── src/
+├── Cargo.toml
+└── Cargo.lock
+```
+
+> [!IMPORTANT]
+> Do not download Minecraft assets from unofficial third-party mirrors. Use the files downloaded by your own official Minecraft installation.
+
+### 2. Extract Resources from the Minecraft 1.8.9 JAR
+
+RustCraft may also require resources that are bundled directly inside the Minecraft 1.8.9 client JAR.
+
+First, make sure Minecraft Java Edition 1.8.9 has been installed through the official Minecraft Launcher.
+
+The Minecraft 1.8.9 JAR is normally located at:
+
+Windows:
+
+```
+%APPDATA%\.minecraft\versions\1.8.9\1.8.9.jar
+```
+
+Linux:
+
+```
+~/.minecraft/versions/1.8.9/1.8.9.jar
+```
+
+macOS:
+
+```
+~/Library/Application Support/minecraft/versions/1.8.9/1.8.9.jar
+```
+
+A JAR file is based on the ZIP archive format. You can open or extract it using a compatible archive utility.
+
+Extract the Minecraft resource directories required by RustCraft from your own `1.8.9.jar`.
+
+Minecraft 1.8.9 resources inside the JAR are typically located under:
+
+```
+assets/minecraft/
+```
+
+Copy the required resource files into RustCraft's asset directory while preserving their directory structure.
+
+For example, the resulting structure may look similar to:
+
+```
+RustCraft/
+└── assets/
+    ├── indexes/
+    ├── objects/
+    └── minecraft/
+        ├── blockstates/
+        ├── lang/
+        ├── models/
+        ├── shaders/
+        └── textures/
+```
+
+The exact set of required resources may change as RustCraft development progresses.
+
+> [!IMPORTANT]
+> You must extract these resources from your own legally obtained Minecraft 1.8.9 installation. RustCraft does not provide, host, or redistribute the Minecraft 1.8.9 JAR or Minecraft-owned game assets.
+
+## Running
+
+Once the required Minecraft assets have been prepared, RustCraft can be started normally.
+
+When running from source:
+
+```
+cargo run --release
+```
+
+When using a prebuilt Windows package, launch:
+
+```
+rustcraft.exe
+```
+
+Make sure the required `assets` directory is available in the runtime location expected by RustCraft.
+
+If RustCraft fails to start or displays missing textures, models, sounds, or language resources, verify that:
+
+- Minecraft Java Edition 1.8.9 has been launched at least once using the official launcher.
+
+- The required official launcher assets have been copied correctly.
+
+- The required resources from `1.8.9.jar` have been extracted.
+
+- The original directory structure has been preserved.
+
+- RustCraft can access the `assets` directory from its current working directory.
+
+## Render Backends
+
+Vulkan is the default renderer. On Windows, Direct3D 12 can be selected with
+the `RUSTCRAFT_RENDER_BACKEND` environment variable:
 
 ```powershell
 $env:RUSTCRAFT_RENDER_BACKEND="dx12"
 cargo run
 ```
 
-The Direct3D 12 backend requires Windows 10 or newer and a D3D12-capable
-adapter. If initialization fails, RustCraft logs the error and falls back to
-Vulkan.
+If Direct3D 12 initialization fails, RustCraft logs the reason and falls back
+to Vulkan. The renderer uses GPU-local static resources with asynchronous
+staging uploads, and groups nearby chunks to reduce CPU submission overhead.
 
----
+## Resource Packs
 
-### Project Structure
+RustCraft supports Minecraft resource packs.
 
-```text
-crates/
-├── game/                # Game crate: client, world, entities, GUI, assets and gameplay policy
-│   └── src/shaders/     # GLSL shaders compiled by the game build script
-├── renderer/            # Renderer crate: backend-neutral Core + RHI
-│   └── src/
-│       ├── core/        # Render graph, queue, materials and resource management
-│       └── rhi/         # Device, resources and command interfaces
-└── renderer/backend/
-    ├── vulkan/          # Vulkan implementation of the renderer RHI
-    └── dx12/            # Direct3D 12 implementation (Windows only)
+Resource pack ZIP files can be placed in:
+
+```
+resourcepacks/
 ```
 
----
+Resource packs can be used to customize supported game resources without modifying RustCraft's source code.
 
-### Key Dependencies
+Minecraft resource packs and original Minecraft assets are not distributed as part of the RustCraft repository.
 
-| Category | Crate | Purpose |
-|---|---|---|
-| Windowing | `winit` | Window creation, events, input |
-| Graphics | `ash`, `ash-window` | Vulkan bindings |
-| Math | `nalgebra` | Linear algebra |
-| Networking | `reqwest`, `flate2` | HTTP, compression |
-| Crypto | `aes`, `rsa`, `sha1`, `sha2` | Protocol encryption |
-| Audio | `rodio` | Sound playback |
-| Image | `image` | Texture loading |
-| Font | `fontdue` | Font rasterization |
-| Serialization | `serde`, `serde_json` | JSON config |
-| Concurrency | `rayon` | Parallel mesh building |
-| Build script | `shaderc` | GLSL → SPIR-V compilation |
+## Shader Packs
 
----
+> [!WARNING]
+> Shader pack support is currently a **Work in Progress**.
 
-### Notes
+RustCraft is working toward shader pack support through its custom Vulkan rendering pipeline.
 
-- Rust edition: **2021**
-- Error handling style: `std::io::Result`, `Option`, `.ok()` chaining (no `anyhow`/`thiserror`)
-- Tests are inline via `#[cfg(test)]`
-- `crates/game/build.rs` automatically compiles shaders in `crates/game/src/shaders`
-- AMD FidelityFX SDK `v1.1.4` is pinned as `third_party/FidelityFX-SDK` for the Vulkan FSR 3.1.4 integration. Initialize it with `git submodule update --init --recursive`.
-- `shaderpacks/` recognizes RustCraft Vulkan packs and detects OptiFine/Iris layouts. OptiFine/Iris program execution requires the Vulkan G-buffer compatibility render graph and is not enabled until that graph is complete.
+The implementation is currently experimental and incomplete. Compatibility with existing Minecraft shader packs is not guaranteed, and the shader pack system may change significantly during development.
 
-### Linux Dependencies
+## Lua Modding
 
-On Linux the following system packages are required:
+RustCraft includes a client-side Lua scripting system designed to provide a flexible way to extend and customize the client.
 
-```bash
-# Debian / Ubuntu
-sudo apt install libshaderc-dev libasound2-dev
+The scripting system is intended to expose controlled game APIs for areas such as:
 
-# Fedora
-sudo dnf install shaderc alsa-lib-devel
+- Camera
 
-# Arch Linux
-sudo pacman -S shaderc alsa-lib
+- World
+
+- Entities
+
+- Player
+
+- Inventory
+
+- Chat
+
+The Lua API and modding capabilities are under active development and may change between versions.
+
+## Platform Support
+
+| Platform | Architecture | Package   |
+| -------- | ------------ | --------- |
+| Windows  | x86_64       | ZIP / EXE |
+| Linux    | x86_64       | AppImage  |
+
+Other platforms and architectures are currently not officially supported.
+
+## Downloads
+
+Prebuilt packages are automatically generated through GitHub Actions.
+
+Development builds are available as GitHub Actions artifacts.
+
+Versioned releases are automatically published when a version tag matching `v*` is pushed.
+
+For example:
+
+```
+v0.1.0
+v0.2.0
+v1.0.0
 ```
 
-Clipboard support uses `wl-paste`/`wl-copy` (Wayland) or `xclip` (X11).
+Release packages do **not** include Minecraft-owned assets or the Minecraft client JAR.
 
----
+Users must provide the required resources from their own legally obtained Minecraft installation.
 
-## 中文
+## Development Status
 
-### 项目简介
+RustCraft is an experimental project and is not yet considered production-ready.
 
-**RustCraft** 是一个使用 **Rust** 编写的 **Minecraft 1.8.9** 客户端复刻项目。  
-它支持通过 **47 协议版本**连接真实 Minecraft 服务器，使用 **Vulkan** 进行世界渲染，并实现了 **Microsoft/Xbox Live OAuth 登录认证**。
+Current development focuses on:
 
-> `minecraft/` 目录包含反编译的 Minecraft 1.8.9 Java 源码，仅用于对照参考。
+- Improving rendering correctness
 
----
+- Optimizing Vulkan performance
 
-### 功能特性
+- Improving Minecraft 1.8.9 compatibility
 
-- ✅ Minecraft 1.8.9 协议网络实现（`net/`）
-- ✅ 基于 Vulkan 的渲染管线（`render/`）
-- ✅ Microsoft/Xbox 认证流程（`auth/`）
-- ✅ 世界/区块/方块/实体系统
-- ✅ 资源加载系统（纹理、模型、资源包、皮肤、音频）
-- ✅ UI、HUD、菜单与字体渲染
-- ✅ 基于 `rodio` 的音频播放
+- Expanding multiplayer protocol support
 
----
+- Improving resource pack compatibility
 
-### 构建与运行
+- Expanding the Lua scripting API
 
-```bash
-# 调试构建（opt-level=1）
-cargo build
+- Improving cross-platform support
 
-# 发布构建（LTO thin, panic=abort, strip）
-cargo build --release
+- Developing shader pack support
 
-# 启动游戏
-cargo run
+Bug reports and contributions are welcome.
 
-# 运行测试
-cargo test
+## Legal Notice
 
-# 代码检查
-cargo clippy
+RustCraft is an independent, unofficial project.
 
-# 格式检查
-cargo fmt -- --check
-```
+RustCraft is **not affiliated with, endorsed by, sponsored by, or officially associated with Mojang Studios or Microsoft**.
 
-### 渲染后端
+Minecraft and related names and assets are trademarks and copyrighted materials of their respective owners.
 
-默认使用 Vulkan。在 Windows 上，可以通过环境变量选择 Direct3D 12：
+This repository does not distribute Minecraft-owned game assets, the Minecraft client JAR, or other proprietary Minecraft content.
 
-```powershell
-$env:RUSTCRAFT_RENDER_BACKEND="dx12"
-cargo run
-```
+Users are responsible for obtaining and using Minecraft resources from their own legally obtained copy of Minecraft in accordance with the applicable terms and licenses.
 
-Direct3D 12 后端需要 Windows 10 或更高版本，以及支持 D3D12 的显卡。
-如果初始化失败，RustCraft 会记录错误并自动回退到 Vulkan。
+## License
 
-### Linux 系统依赖
+RustCraft is distributed under the **RustCraft Noncommercial Source-Available License**.
 
-```bash
-# Debian / Ubuntu
-sudo apt install libshaderc-dev libasound2-dev
+In summary:
 
-# Fedora
-sudo dnf install shaderc alsa-lib-devel
+- Personal and noncommercial use is permitted.
 
-# Arch Linux
-sudo pacman -S shaderc alsa-lib
-```
+- Studying and modifying the source code is permitted.
 
-剪贴板功能需要 `wl-paste`/`wl-copy`（Wayland）或 `xclip`（X11）。
+- Private modifications for personal, noncommercial use are permitted.
 
----
+- Commercial use is prohibited without separate written permission.
 
-### 项目结构
+- Closed-source distribution of modified versions is prohibited.
 
-```text
-crates/
-├── game/                # game crate：客户端、世界、实体、GUI、资源和游戏渲染策略
-│   └── src/shaders/     # 由 game build script 编译的 GLSL 着色器
-├── renderer/            # renderer crate：与后端无关的 Core + RHI
-│   └── src/
-│       ├── core/        # Render Graph、队列、材质和资源管理
-│       └── rhi/         # Device、资源和 Command 接口
-└── renderer/backend/
-    ├── vulkan/          # renderer RHI 的 Vulkan 实现
-    └── dx12/            # Direct3D 12 实现（仅 Windows）
-```
+- If a modified version is distributed, its corresponding source code must be made publicly available.
 
----
+- Minecraft-owned and other third-party assets are not covered by the RustCraft license.
 
-### 关键依赖
-
-| 分类 | Crate | 用途 |
-|---|---|---|
-| 窗口与输入 | `winit` | 窗口创建、事件、输入 |
-| 图形渲染 | `ash`, `ash-window` | Vulkan 绑定 |
-| 数学 | `nalgebra` | 线性代数 |
-| 网络 | `reqwest`, `flate2` | HTTP 与压缩 |
-| 加密 | `aes`, `rsa`, `sha1`, `sha2` | 协议加密 |
-| 音频 | `rodio` | 声音播放 |
-| 图像 | `image` | 纹理加载 |
-| 字体 | `fontdue` | 字体光栅化 |
-| 序列化 | `serde`, `serde_json` | JSON 配置 |
-| 并行 | `rayon` | 并行网格构建 |
-| 构建脚本 | `shaderc` | GLSL → SPIR-V 编译 |
-
----
-
-### 说明
-
-- Rust 版本：**2021**
-- 错误处理风格：`std::io::Result`、`Option`、`.ok()` 链式调用（未使用 `anyhow/thiserror`）
-- 测试以源码内联 `#[cfg(test)]` 形式组织
-- `crates/game/build.rs` 会自动编译 `crates/game/src/shaders` 下的着色器
-- AMD FidelityFX SDK `v1.1.4` 固定在 `third_party/FidelityFX-SDK`，用于 Vulkan FSR 3.1.4 集成。请通过 `git submodule update --init --recursive` 初始化。
-- `shaderpacks/` 可识别 RustCraft Vulkan 包并检测 OptiFine/Iris 布局。OptiFine/Iris 程序执行依赖 Vulkan G-buffer 兼容渲染图，在该渲染图完成前不会错误地启用。
-
----
-
-## Contributing / 贡献
-
-PRs and issues are welcome.  
-欢迎提交 Issue 与 PR，一起完善 RustCraft。
-
----
-
-## Disclaimer / 免责声明
-
-This project is an independent reimplementation for educational and technical purposes.  
-Minecraft is a trademark of Mojang Studios / Microsoft.
-
-本项目为独立技术复刻与学习用途。  
-Minecraft 商标归 Mojang Studios / Microsoft 所有.
+See the [LICENSE](LICENSE) file for the complete license terms.

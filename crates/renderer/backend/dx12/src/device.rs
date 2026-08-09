@@ -15,6 +15,18 @@ use super::pipeline;
 use super::shader;
 use super::{backend_error, checked_u32, DirectX12Backend, MAX_BINDINGS};
 
+fn initial_buffer_state(usage: BufferUsage) -> D3D12_RESOURCE_STATES {
+    if usage.contains(BufferUsage::INDEX) {
+        D3D12_RESOURCE_STATE_INDEX_BUFFER
+    } else if usage.contains(BufferUsage::VERTEX) || usage.contains(BufferUsage::UNIFORM) {
+        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER
+    } else if usage.contains(BufferUsage::STORAGE) {
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS
+    } else {
+        D3D12_RESOURCE_STATE_COMMON
+    }
+}
+
 impl DirectX12Backend {
     pub(crate) fn create_buffer_native(&mut self, desc: BufferDesc) -> RhiResult<BufferHandle> {
         if desc.size == 0 {
@@ -25,9 +37,32 @@ impl DirectX12Backend {
         } else {
             desc.size
         };
-        let resource = {
+        let (resource, state) = {
             let native = self.native_ref()?;
-            context::create_upload_buffer(&native.device, resource_size, &desc.label)?
+            if desc.memory == BufferMemory::DeviceLocal {
+                let resource = context::create_committed_resource(
+                    &native.device,
+                    &context::buffer_resource_desc(resource_size)?,
+                    if desc.usage.contains(BufferUsage::TRANSFER_DST) {
+                        D3D12_RESOURCE_STATE_COPY_DEST
+                    } else {
+                        initial_buffer_state(desc.usage)
+                    },
+                    None,
+                )?;
+                context::set_resource_name(&resource, &desc.label);
+                let state = if desc.usage.contains(BufferUsage::TRANSFER_DST) {
+                    D3D12_RESOURCE_STATE_COPY_DEST
+                } else {
+                    initial_buffer_state(desc.usage)
+                };
+                (resource, state)
+            } else {
+                (
+                    context::create_upload_buffer(&native.device, resource_size, &desc.label)?,
+                    D3D12_RESOURCE_STATE_GENERIC_READ,
+                )
+            }
         };
         let handle = self.resources.create_buffer(desc.clone())?;
         let native = self.native_mut()?;
@@ -37,7 +72,8 @@ impl DirectX12Backend {
                 resource,
                 size: desc.size,
                 resource_size,
-                state: D3D12_RESOURCE_STATE_GENERIC_READ,
+                usage: desc.usage,
+                state,
             },
         );
         Ok(handle)
@@ -141,11 +177,11 @@ impl DirectX12Backend {
         offset: u64,
         data: &[u8],
     ) -> RhiResult<()> {
-        let size = self
+        let (size, memory) = self
             .resources
             .buffer(handle)
-            .ok_or(RhiError::InvalidHandle)?
-            .size;
+            .map(|desc| (desc.size, desc.memory))
+            .ok_or(RhiError::InvalidHandle)?;
         let data_size = u64::try_from(data.len())
             .map_err(|_| RhiError::InvalidDescription("buffer upload is too large"))?;
         if offset > size || data_size > size - offset {
@@ -153,7 +189,12 @@ impl DirectX12Backend {
                 "buffer upload exceeds the buffer description",
             ));
         }
-        self.wait_idle_native()?;
+        if data.is_empty() {
+            return Ok(());
+        }
+        if memory == BufferMemory::DeviceLocal {
+            return self.upload_device_local_buffer_native(handle, offset, data);
+        }
         let resource = self
             .native_ref()?
             .buffers
@@ -173,6 +214,39 @@ impl DirectX12Backend {
             );
             resource.Unmap(0, None);
         }
+        Ok(())
+    }
+
+    fn upload_device_local_buffer_native(
+        &mut self,
+        destination: BufferHandle,
+        destination_offset: u64,
+        data: &[u8],
+    ) -> RhiResult<()> {
+        let staging = self.create_buffer_native(BufferDesc::new(
+            data.len() as u64,
+            BufferUsage::TRANSFER_SRC,
+            "rhi.buffer-upload",
+        ))?;
+        if let Err(error) = self.upload_buffer_native(staging, 0, data) {
+            let _ = self.destroy_buffer_native(staging);
+            return Err(error);
+        }
+        let staging_resource = self
+            .native_mut()?
+            .buffers
+            .remove(&staging)
+            .ok_or(RhiError::InvalidHandle)?;
+        self.resources.destroy_buffer(staging)?;
+        self.native_mut()?
+            .pending_buffer_uploads
+            .push(context::PendingBufferUpload {
+                staging: staging_resource,
+                staging_handle: staging,
+                destination,
+                destination_offset,
+                size: data.len() as u64,
+            });
         Ok(())
     }
 
@@ -326,9 +400,22 @@ impl DirectX12Backend {
     }
 
     pub(crate) fn destroy_buffer_native(&mut self, handle: BufferHandle) -> RhiResult<()> {
-        self.wait_idle_native()?;
         self.resources.destroy_buffer(handle)?;
-        self.native_mut()?.buffers.remove(&handle);
+        let native = self.native_mut()?;
+        // A queued upload has not reached the GPU yet. Dropping its staging
+        // resource is safe when the destination is destroyed before command
+        // recording starts.
+        native
+            .pending_buffer_uploads
+            .retain(|upload| upload.destination != handle);
+        if let Some(resource) = native.buffers.remove(&handle) {
+            // Keep resources alive until the newest in-flight submission has
+            // completed. This avoids the old device-wide idle wait while a
+            // chunk mesh is replaced.
+            if let Some(submission) = native.pending.last_mut() {
+                submission.deferred_buffers.push(resource);
+            }
+        }
         Ok(())
     }
 
@@ -372,11 +459,13 @@ impl CommandQueue for DirectX12Backend {
     fn submit(&mut self, command_buffer: CommandBuffer) -> RhiResult<SubmissionId> {
         let token = context::command_buffer_token(&command_buffer)?;
         let commands = command_buffer.commands();
-        let submission = unsafe { Box::from_raw(token as usize as *mut context::NativeSubmission) };
+        let mut submission =
+            unsafe { Box::from_raw(token as usize as *mut context::NativeSubmission) };
         let command_list: ID3D12CommandList = submission
             .command_list
             .cast()
             .map_err(|error| backend_error("cast Direct3D 12 command list", error))?;
+        let deferred_buffers = std::mem::take(&mut submission._deferred_buffers);
         let fence_value = {
             let native = self.native_mut()?;
             unsafe {
@@ -392,6 +481,7 @@ impl CommandQueue for DirectX12Backend {
             native.pending.push(context::PendingSubmission {
                 fence_value: value,
                 _submission: submission,
+                deferred_buffers,
             });
             if let Some(surface) = native.surface.as_mut() {
                 if let Some(image_index) = surface.acquired_image {

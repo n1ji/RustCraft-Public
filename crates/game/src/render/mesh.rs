@@ -3,8 +3,8 @@
 use renderer_api::core::RendererRuntime;
 use renderer_api::rhi::device::RenderDevice;
 use renderer_api::rhi::types::{
-    BindGroupHandle, BufferDesc, BufferHandle, BufferUsage, MaterialHandle, PipelineHandle,
-    RhiResult,
+    BindGroupHandle, BufferDesc, BufferHandle, BufferMemory, BufferUsage, MaterialHandle,
+    PipelineHandle, RhiResult,
 };
 
 use super::MeshDraw;
@@ -30,16 +30,39 @@ pub fn upload_mesh_with_bind_group<D: RenderDevice>(
     indices: &[u32],
     label: &str,
 ) -> RhiResult<MeshDraw> {
+    upload_mesh_with_bind_group_memory(
+        runtime,
+        pipeline,
+        bind_group,
+        vertices,
+        indices,
+        label,
+        renderer_api::rhi::types::BufferMemory::Upload,
+    )
+}
+
+pub(crate) fn upload_mesh_with_bind_group_memory<D: RenderDevice>(
+    runtime: &mut RendererRuntime<D>,
+    pipeline: PipelineHandle,
+    bind_group: Option<BindGroupHandle>,
+    vertices: &[u8],
+    indices: &[u32],
+    label: &str,
+    memory: renderer_api::rhi::types::BufferMemory,
+) -> RhiResult<MeshDraw> {
     if vertices.is_empty() {
         return Err(renderer_api::rhi::types::RhiError::InvalidDescription(
             "mesh vertex data must be non-empty",
         ));
     }
-    let vertex_buffer = runtime.create_buffer(BufferDesc::new(
-        vertices.len() as u64,
-        BufferUsage::VERTEX | BufferUsage::TRANSFER_DST,
-        format!("{label}.vertices"),
-    ))?;
+    let vertex_buffer = runtime.create_buffer(
+        BufferDesc::new(
+            vertices.len() as u64,
+            BufferUsage::VERTEX | BufferUsage::TRANSFER_DST,
+            format!("{label}.vertices"),
+        )
+        .with_memory(memory),
+    )?;
     if let Err(error) = runtime.device().upload_buffer(vertex_buffer, 0, vertices) {
         let _ = runtime.destroy_buffer(vertex_buffer);
         return Err(error);
@@ -48,11 +71,14 @@ pub fn upload_mesh_with_bind_group<D: RenderDevice>(
     let index_buffer = if indices.is_empty() {
         None
     } else {
-        let handle = match runtime.create_buffer(BufferDesc::new(
-            (indices.len() * std::mem::size_of::<u32>()) as u64,
-            BufferUsage::INDEX | BufferUsage::TRANSFER_DST,
-            format!("{label}.indices"),
-        )) {
+        let handle = match runtime.create_buffer(
+            BufferDesc::new(
+                (indices.len() * std::mem::size_of::<u32>()) as u64,
+                BufferUsage::INDEX | BufferUsage::TRANSFER_DST,
+                format!("{label}.indices"),
+            )
+            .with_memory(memory),
+        ) {
             Ok(handle) => handle,
             Err(error) => {
                 let _ = runtime.destroy_buffer(vertex_buffer);
@@ -94,13 +120,14 @@ pub fn upload_gui_batch<D: RenderDevice>(
     if builder.vertices.is_empty() || builder.indices.is_empty() {
         return Ok(None);
     }
-    upload_mesh_with_bind_group(
+    upload_mesh_with_bind_group_memory(
         runtime,
         pipeline,
         bind_group,
         bytemuck::cast_slice(&builder.vertices),
         &builder.indices,
         label,
+        BufferMemory::DeviceLocal,
     )
     .map(Some)
 }
@@ -115,13 +142,14 @@ pub fn upload_chunk_mesh<D: RenderDevice>(
     if mesh.is_empty() {
         return Ok(None);
     }
-    upload_mesh_with_bind_group(
+    upload_mesh_with_bind_group_memory(
         runtime,
         pipeline,
         bind_group,
         bytemuck::cast_slice(&mesh.vertices),
         &mesh.indices,
         label,
+        renderer_api::rhi::types::BufferMemory::DeviceLocal,
     )
     .map(Some)
 }
@@ -137,13 +165,14 @@ pub fn upload_entity_mesh<D: RenderDevice>(
     if vertices.is_empty() || indices.is_empty() {
         return Ok(None);
     }
-    upload_mesh_with_bind_group(
+    upload_mesh_with_bind_group_memory(
         runtime,
         pipeline,
         bind_group,
         bytemuck::cast_slice(vertices),
         indices,
         label,
+        BufferMemory::DeviceLocal,
     )
     .map(Some)
 }
@@ -174,17 +203,22 @@ pub fn update_entity_mesh<D: RenderDevice>(
         runtime
             .resources()
             .buffer(old.vertex_buffer)
-            .is_some_and(|desc| desc.size >= vertex_size)
+            .is_some_and(|desc| {
+                desc.size >= vertex_size && desc.memory == BufferMemory::DeviceLocal
+            })
     });
     let vertex_buffer = if vertex_reusable {
         old.expect("reusable mesh must have an old draw")
             .vertex_buffer
     } else {
-        runtime.create_buffer(BufferDesc::new(
-            vertex_size,
-            BufferUsage::VERTEX | BufferUsage::TRANSFER_DST,
-            format!("{label}.vertices"),
-        ))?
+        runtime.create_buffer(
+            BufferDesc::new(
+                vertex_size,
+                BufferUsage::VERTEX | BufferUsage::TRANSFER_DST,
+                format!("{label}.vertices"),
+            )
+            .device_local(),
+        )?
     };
     if let Err(error) =
         runtime
@@ -207,15 +241,24 @@ pub fn update_entity_mesh<D: RenderDevice>(
                 .buffer(buffer)
                 .map(|desc| (buffer, desc.size))
         })
-        .is_some_and(|(_, capacity)| capacity >= index_size);
+        .is_some_and(|(buffer, capacity)| {
+            capacity >= index_size
+                && runtime
+                    .resources()
+                    .buffer(buffer)
+                    .is_some_and(|desc| desc.memory == BufferMemory::DeviceLocal)
+        });
     let index_buffer = if index_reusable {
         old.and_then(|old| old.index_buffer)
     } else {
-        match runtime.create_buffer(BufferDesc::new(
-            index_size,
-            BufferUsage::INDEX | BufferUsage::TRANSFER_DST,
-            format!("{label}.indices"),
-        )) {
+        match runtime.create_buffer(
+            BufferDesc::new(
+                index_size,
+                BufferUsage::INDEX | BufferUsage::TRANSFER_DST,
+                format!("{label}.indices"),
+            )
+            .device_local(),
+        ) {
             Ok(handle) => Some(handle),
             Err(error) => {
                 if !vertex_reusable {

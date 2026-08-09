@@ -543,6 +543,91 @@ impl CommandEncoder for VulkanCommandEncoder {
         Ok(())
     }
 
+    fn copy_buffer(
+        &mut self,
+        source: BufferHandle,
+        destination: BufferHandle,
+        source_offset: u64,
+        destination_offset: u64,
+        size: u64,
+    ) -> RhiResult<()> {
+        if self.render_pass_open {
+            return Err(RhiError::Message(String::from(
+                "buffer copies cannot be recorded inside a render pass",
+            )));
+        }
+        let Some(&source_buffer) = self.resource_tables.buffer_objects.get(&source) else {
+            return Err(RhiError::InvalidHandle);
+        };
+        let Some(&destination_buffer) = self.resource_tables.buffer_objects.get(&destination)
+        else {
+            return Err(RhiError::InvalidHandle);
+        };
+        let source_size = self
+            .resource_tables
+            .buffer_sizes
+            .get(&source)
+            .copied()
+            .ok_or(RhiError::InvalidHandle)?;
+        let destination_size = self
+            .resource_tables
+            .buffer_sizes
+            .get(&destination)
+            .copied()
+            .ok_or(RhiError::InvalidHandle)?;
+        let source_end = source_offset
+            .checked_add(size)
+            .ok_or(RhiError::InvalidDescription("buffer copy range overflow"))?;
+        let destination_end = destination_offset
+            .checked_add(size)
+            .ok_or(RhiError::InvalidDescription("buffer copy range overflow"))?;
+        if size == 0 || source_end > source_size || destination_end > destination_size {
+            return Err(RhiError::InvalidDescription(
+                "buffer copy range exceeds a buffer",
+            ));
+        }
+        unsafe {
+            self.device.cmd_copy_buffer(
+                self.command_buffer,
+                source_buffer,
+                destination_buffer,
+                &[vk::BufferCopy {
+                    src_offset: source_offset,
+                    dst_offset: destination_offset,
+                    size,
+                }],
+            );
+            // The upload path records this copy immediately before the buffer
+            // is consumed by vertex/index/uniform reads. A conservative
+            // transfer-to-memory-read barrier keeps the helper independent of
+            // the destination buffer's eventual shader usage.
+            self.device.cmd_pipeline_barrier(
+                self.command_buffer,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[vk::BufferMemoryBarrier {
+                    src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
+                    dst_access_mask: vk::AccessFlags::MEMORY_READ,
+                    buffer: destination_buffer,
+                    offset: destination_offset,
+                    size,
+                    ..Default::default()
+                }],
+                &[],
+            );
+        }
+        self.commands.push(Command::CopyBuffer {
+            source,
+            destination,
+            source_offset,
+            destination_offset,
+            size,
+        });
+        Ok(())
+    }
+
     fn blit_texture(&mut self, source: TextureHandle, destination: TextureHandle) -> RhiResult<()> {
         if self.render_pass_open {
             return Err(RhiError::Message(String::from(

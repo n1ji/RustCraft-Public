@@ -1,5 +1,7 @@
 use renderer_api::rhi::device::RenderDevice;
-use renderer_api::rhi::types::{BindGroupHandle, PipelineHandle, RhiResult, TextureHandle};
+use renderer_api::rhi::types::{
+    BindGroupHandle, BufferHandle, PipelineHandle, RhiResult, TextureHandle,
+};
 use std::collections::HashSet;
 
 use crate::client::interaction::SelectionBox;
@@ -12,9 +14,29 @@ use super::chunk_push_constants;
 use super::types::WorldGpuState;
 use renderer_api::core::{RendererRuntime, SkyEnvironment};
 
+/// A spatially coarse batch of chunk geometry.
+///
+/// The vertex positions are already translated into world space, so both the
+/// opaque and transparent draws can share one buffer without changing push
+/// constants between chunks. Four-by-four chunk groups keep the number of
+/// draw calls low while retaining useful frustum culling at the group level.
+#[derive(Clone, Copy)]
+pub(super) struct WorldBatch {
+    pub(super) vertex_buffer: BufferHandle,
+    pub(super) index_buffer: BufferHandle,
+    pub(super) opaque_index_count: u32,
+    pub(super) transparent_first_index: u32,
+    pub(super) transparent_index_count: u32,
+    pub(super) aabb_min: [f32; 3],
+    pub(super) aabb_max: [f32; 3],
+}
+
 #[derive(Default)]
 pub struct WorldRenderer {
     pub(super) draws: Vec<MeshDraw>,
+    pub(super) batches: Vec<WorldBatch>,
+    pub(super) batch_visible: Vec<bool>,
+    pub(super) batch_transparent_sort_keys: Vec<u64>,
     pub(super) draw_positions: Vec<Option<(i32, i32)>>,
     pub(super) draw_centers: Vec<Option<[f32; 3]>>,
     pub(super) transparent_ranges: Vec<u32>,
@@ -116,6 +138,9 @@ impl WorldRenderer {
 
     pub fn set_draws(&mut self, draws: Vec<MeshDraw>) {
         self.draws = draws;
+        self.batches.clear();
+        self.batch_visible.clear();
+        self.batch_transparent_sort_keys.clear();
         self.draw_positions.clear();
         self.draw_positions.resize(self.draws.len(), None);
         self.draw_centers.clear();
@@ -172,6 +197,9 @@ impl WorldRenderer {
         mesh: &ChunkMesh,
         label: &str,
     ) -> RhiResult<()> {
+        self.batches.clear();
+        self.batch_visible.clear();
+        self.batch_transparent_sort_keys.clear();
         if let Some(draw) =
             crate::render::mesh::upload_chunk_mesh(runtime, pipeline, bind_group, mesh, label)?
         {

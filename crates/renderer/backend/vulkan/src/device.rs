@@ -106,6 +106,8 @@ impl VulkanBackend {
             bind_groups: HashMap::new(),
             resource_tables: std::sync::Arc::new(Default::default()),
             pending_submissions: Vec::new(),
+            pending_buffer_uploads: Vec::new(),
+            active_deferred_buffers: Vec::new(),
             frame_slots,
             next_frame_slot: 0,
             swapchain_loader: None,
@@ -198,17 +200,23 @@ impl VulkanBackend {
         offset: u64,
         data: &[u8],
     ) -> RhiResult<()> {
-        let buffer_size = self
+        let (buffer_size, memory) = self
             .resources
             .buffer(handle)
-            .ok_or(RhiError::InvalidHandle)?
-            .size;
+            .map(|desc| (desc.size, desc.memory))
+            .ok_or(RhiError::InvalidHandle)?;
         let data_size = u64::try_from(data.len())
             .map_err(|_| RhiError::InvalidDescription("buffer upload is too large"))?;
         if offset > buffer_size || data_size > buffer_size - offset {
             return Err(RhiError::InvalidDescription(
                 "buffer upload exceeds the buffer description",
             ));
+        }
+        if data.is_empty() {
+            return Ok(());
+        }
+        if memory == BufferMemory::DeviceLocal {
+            return self.upload_device_local_buffer(handle, offset, data);
         }
         let Some(native) = self.native.as_mut() else {
             return Err(RhiError::Backend(String::from(
@@ -230,6 +238,47 @@ impl VulkanBackend {
                 data.len(),
             );
         }
+        Ok(())
+    }
+
+    fn upload_device_local_buffer(
+        &mut self,
+        destination: BufferHandle,
+        destination_offset: u64,
+        data: &[u8],
+    ) -> RhiResult<()> {
+        let staging = <Self as RenderDevice>::create_buffer(
+            self,
+            BufferDesc::new(
+                data.len() as u64,
+                BufferUsage::TRANSFER_SRC,
+                "rhi.buffer-upload",
+            ),
+        )?;
+        if let Err(error) = self.upload_buffer(staging, 0, data) {
+            let _ = <Self as RenderDevice>::destroy_buffer(self, staging);
+            return Err(error);
+        }
+        let staging_resource = self
+            .native
+            .as_mut()
+            .and_then(|native| {
+                native.remove_buffer_table(staging);
+                native.buffers.remove(&staging)
+            })
+            .ok_or(RhiError::InvalidHandle)?;
+        self.resources.destroy_buffer(staging)?;
+        self.native
+            .as_mut()
+            .ok_or_else(|| RhiError::Backend(String::from("Vulkan context disappeared")))?
+            .pending_buffer_uploads
+            .push(super::context::PendingBufferUpload {
+                staging: staging_resource,
+                staging_handle: staging,
+                destination,
+                destination_offset,
+                size: data.len() as u64,
+            });
         Ok(())
     }
 
@@ -615,7 +664,7 @@ impl CommandQueue for VulkanBackend {
                     .push(super::context::PendingSubmission {
                         submission_id: self.next_submission.wrapping_add(1),
                         frame_slot,
-                        deferred_buffers: Vec::new(),
+                        deferred_buffers: std::mem::take(&mut native.active_deferred_buffers),
                     });
                 native.acquired_frame_slot = None;
             }
@@ -703,6 +752,12 @@ impl RenderDevice for VulkanBackend {
                 "buffer usage must not be empty",
             ));
         }
+        let usage = usage
+            | if desc.memory == BufferMemory::DeviceLocal {
+                vk::BufferUsageFlags::TRANSFER_DST
+            } else {
+                vk::BufferUsageFlags::empty()
+            };
         let buffer = match unsafe {
             native.device.create_buffer(
                 &vk::BufferCreateInfo::default().size(desc.size).usage(usage),
@@ -729,7 +784,10 @@ impl RenderDevice for VulkanBackend {
                 .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
                     name,
                     requirements,
-                    location: gpu_allocator::MemoryLocation::CpuToGpu,
+                    location: match desc.memory {
+                        BufferMemory::Upload => gpu_allocator::MemoryLocation::CpuToGpu,
+                        BufferMemory::DeviceLocal => gpu_allocator::MemoryLocation::GpuOnly,
+                    },
                     linear: true,
                     allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
                 }) {
@@ -1043,6 +1101,19 @@ impl RenderDevice for VulkanBackend {
         self.resources.validate_buffer_destruction(handle)?;
         let _ = self.resources.destroy_buffer(handle)?;
         if let Some(native) = self.native.as_mut() {
+            let pending_uploads = std::mem::take(&mut native.pending_buffer_uploads);
+            let mut retained_uploads = Vec::with_capacity(pending_uploads.len());
+            let mut cleanup_error = None;
+            for upload in pending_uploads {
+                if upload.destination == handle {
+                    if let Err(error) = native.destroy_buffer_resource(upload.staging) {
+                        cleanup_error.get_or_insert(error);
+                    }
+                } else {
+                    retained_uploads.push(upload);
+                }
+            }
+            native.pending_buffer_uploads = retained_uploads;
             if let Some(resource) = native.buffers.remove(&handle) {
                 native.remove_buffer_table(handle);
                 if let Some(submission) = native.pending_submissions.last_mut() {
@@ -1056,6 +1127,9 @@ impl RenderDevice for VulkanBackend {
                             RhiError::Backend(format!("free Vulkan buffer: {error:?}"))
                         })?;
                 }
+            }
+            if let Some(error) = cleanup_error {
+                return Err(error);
             }
         }
         Ok(())
@@ -1216,11 +1290,72 @@ impl RenderDevice for VulkanBackend {
                 "begin Vulkan command buffer: {error:?}"
             )));
         }
+        let pending_uploads = std::mem::take(&mut native.pending_buffer_uploads);
+        let mut upload_commands = Vec::with_capacity(pending_uploads.len());
+        for upload in pending_uploads {
+            let destination_buffer = native
+                .resource_tables
+                .buffer_objects
+                .get(&upload.destination)
+                .copied()
+                .ok_or(RhiError::InvalidHandle)?;
+            let destination_size = native
+                .resource_tables
+                .buffer_sizes
+                .get(&upload.destination)
+                .copied()
+                .ok_or(RhiError::InvalidHandle)?;
+            let destination_end = upload
+                .destination_offset
+                .checked_add(upload.size)
+                .ok_or(RhiError::InvalidDescription("buffer upload range overflow"))?;
+            if upload.size == 0 || destination_end > destination_size {
+                return Err(RhiError::InvalidDescription(
+                    "buffer upload exceeds the destination buffer",
+                ));
+            }
+            unsafe {
+                native.device.cmd_copy_buffer(
+                    command_buffer,
+                    upload.staging.buffer,
+                    destination_buffer,
+                    &[vk::BufferCopy {
+                        src_offset: 0,
+                        dst_offset: upload.destination_offset,
+                        size: upload.size,
+                    }],
+                );
+                native.device.cmd_pipeline_barrier(
+                    command_buffer,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::ALL_COMMANDS,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[vk::BufferMemoryBarrier {
+                        src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
+                        dst_access_mask: vk::AccessFlags::MEMORY_READ,
+                        buffer: destination_buffer,
+                        offset: upload.destination_offset,
+                        size: upload.size,
+                        ..Default::default()
+                    }],
+                    &[],
+                );
+            }
+            upload_commands.push(Command::CopyBuffer {
+                source: upload.staging_handle,
+                destination: upload.destination,
+                source_offset: 0,
+                destination_offset: upload.destination_offset,
+                size: upload.size,
+            });
+            native.active_deferred_buffers.push(upload.staging);
+        }
         Ok(Box::new(VulkanCommandEncoder {
             device: native.device.clone(),
             command_buffer,
             label: label.to_string(),
-            commands: Vec::new(),
+            commands: upload_commands,
             render_pass_open: false,
             bound_pipeline: None,
             bound_pipeline_handle: None,

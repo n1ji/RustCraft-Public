@@ -77,6 +77,14 @@ pub(crate) struct PendingSubmission {
     pub(crate) deferred_buffers: Vec<NativeBuffer>,
 }
 
+pub(crate) struct PendingBufferUpload {
+    pub(crate) staging: NativeBuffer,
+    pub(crate) staging_handle: BufferHandle,
+    pub(crate) destination: BufferHandle,
+    pub(crate) destination_offset: u64,
+    pub(crate) size: u64,
+}
+
 pub(crate) struct FrameSlot {
     pub(crate) command_buffer: vk::CommandBuffer,
     pub(crate) fence: vk::Fence,
@@ -106,6 +114,8 @@ pub(crate) struct NativeState {
     pub(crate) bind_groups: HashMap<BindGroupHandle, NativeBindGroup>,
     pub(crate) resource_tables: Arc<NativeResourceTables>,
     pub(crate) pending_submissions: Vec<PendingSubmission>,
+    pub(crate) pending_buffer_uploads: Vec<PendingBufferUpload>,
+    pub(crate) active_deferred_buffers: Vec<NativeBuffer>,
     pub(crate) frame_slots: Vec<FrameSlot>,
     pub(crate) next_frame_slot: usize,
     pub(crate) swapchain_loader: Option<ash::khr::swapchain::Device>,
@@ -125,6 +135,15 @@ impl NativeState {
         self.allocator
             .as_mut()
             .expect("native Vulkan state always owns an allocator")
+    }
+
+    pub(crate) fn destroy_buffer_resource(&mut self, resource: NativeBuffer) -> RhiResult<()> {
+        unsafe {
+            self.device.destroy_buffer(resource.buffer, None);
+        }
+        self.allocator_mut()
+            .free(resource.allocation)
+            .map_err(|error| RhiError::Backend(format!("free Vulkan buffer: {error:?}")))
     }
 
     pub(crate) fn add_texture_table(
@@ -284,6 +303,15 @@ impl Drop for NativeState {
                     }
                 }
             }
+        }
+
+        let pending_uploads = std::mem::take(&mut self.pending_buffer_uploads);
+        for upload in pending_uploads {
+            let _ = self.destroy_buffer_resource(upload.staging);
+        }
+        let active_deferred_buffers = std::mem::take(&mut self.active_deferred_buffers);
+        for resource in active_deferred_buffers {
+            let _ = self.destroy_buffer_resource(resource);
         }
 
         unsafe {
@@ -630,6 +658,8 @@ where
             bind_groups: HashMap::new(),
             resource_tables: Arc::new(Default::default()),
             pending_submissions: Vec::new(),
+            pending_buffer_uploads: Vec::new(),
+            active_deferred_buffers: Vec::new(),
             frame_slots,
             next_frame_slot: 0,
             swapchain_loader: None,

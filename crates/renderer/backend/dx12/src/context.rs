@@ -160,7 +160,16 @@ pub(crate) struct NativeBuffer {
     pub(crate) resource: ID3D12Resource,
     pub(crate) size: u64,
     pub(crate) resource_size: u64,
+    pub(crate) usage: BufferUsage,
     pub(crate) state: D3D12_RESOURCE_STATES,
+}
+
+pub(crate) struct PendingBufferUpload {
+    pub(crate) staging: NativeBuffer,
+    pub(crate) staging_handle: BufferHandle,
+    pub(crate) destination: BufferHandle,
+    pub(crate) destination_offset: u64,
+    pub(crate) size: u64,
 }
 
 #[derive(Clone)]
@@ -200,11 +209,13 @@ pub(crate) struct NativeBindGroup {
 pub(crate) struct NativeSubmission {
     pub(crate) _allocator: ID3D12CommandAllocator,
     pub(crate) command_list: ID3D12GraphicsCommandList,
+    pub(crate) _deferred_buffers: Vec<NativeBuffer>,
 }
 
 pub(crate) struct PendingSubmission {
     pub(crate) fence_value: u64,
     pub(crate) _submission: Box<NativeSubmission>,
+    pub(crate) deferred_buffers: Vec<NativeBuffer>,
 }
 
 #[derive(Clone)]
@@ -265,6 +276,7 @@ pub(crate) struct NativeState {
     pub(crate) fence_event: HANDLE,
     pub(crate) next_fence: u64,
     pub(crate) pending: Vec<PendingSubmission>,
+    pub(crate) pending_buffer_uploads: Vec<PendingBufferUpload>,
     pub(crate) resource_heap: DescriptorHeapState,
     pub(crate) sampler_heap: DescriptorHeapState,
     pub(crate) rtv_heap: DescriptorHeapState,
@@ -434,6 +446,7 @@ pub(crate) fn create_native_state(config: &DirectX12BackendConfig) -> RhiResult<
             fence_event,
             next_fence: 1,
             pending: Vec::new(),
+            pending_buffer_uploads: Vec::new(),
             resource_heap,
             sampler_heap,
             rtv_heap,
@@ -813,15 +826,11 @@ pub(crate) fn create_committed_resource(
     resource.ok_or_else(|| RhiError::Backend(String::from("Direct3D 12 returned a null resource")))
 }
 
-pub(crate) fn create_upload_buffer(
-    device: &ID3D12Device,
-    size: u64,
-    label: &str,
-) -> RhiResult<ID3D12Resource> {
+pub(crate) fn buffer_resource_desc(size: u64) -> RhiResult<D3D12_RESOURCE_DESC> {
     if size == 0 {
         return Err(RhiError::InvalidDescription("buffer size must be non-zero"));
     }
-    let desc = D3D12_RESOURCE_DESC {
+    Ok(D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
         Alignment: 0,
         Width: size,
@@ -835,7 +844,18 @@ pub(crate) fn create_upload_buffer(
         },
         Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
         Flags: D3D12_RESOURCE_FLAG_NONE,
-    };
+    })
+}
+
+pub(crate) fn create_upload_buffer(
+    device: &ID3D12Device,
+    size: u64,
+    label: &str,
+) -> RhiResult<ID3D12Resource> {
+    if size == 0 {
+        return Err(RhiError::InvalidDescription("buffer size must be non-zero"));
+    }
+    let desc = buffer_resource_desc(size)?;
     let heap = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_UPLOAD,
         CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,

@@ -92,11 +92,14 @@ impl SkyRenderer {
         pipeline: PipelineHandle,
     ) -> RhiResult<()> {
         self.destroy_gpu(runtime);
-        let uniform_buffer = runtime.create_buffer(BufferDesc::new(
-            std::mem::size_of::<SkyUniforms>() as u64,
-            BufferUsage::UNIFORM | BufferUsage::TRANSFER_DST,
-            "game.sky.uniforms",
-        ))?;
+        let uniform_buffer = runtime.create_buffer(
+            BufferDesc::new(
+                std::mem::size_of::<SkyUniforms>() as u64,
+                BufferUsage::UNIFORM | BufferUsage::TRANSFER_DST,
+                "game.sky.uniforms",
+            )
+            .device_local(),
+        )?;
         let sampler = match runtime.create_sampler(SamplerDesc {
             linear_filter: true,
             repeat_u: false,
@@ -170,11 +173,14 @@ impl SkyRenderer {
             }
         };
         let vertex_bytes = bytemuck::cast_slice(&[[0.0f32, 0.0], [2.0, 0.0], [0.0, 2.0]]);
-        let vertex_buffer = match runtime.create_buffer(BufferDesc::new(
-            vertex_bytes.len() as u64,
-            BufferUsage::VERTEX | BufferUsage::TRANSFER_DST,
-            "game.sky.fullscreen-triangle",
-        )) {
+        let vertex_buffer = match runtime.create_buffer(
+            BufferDesc::new(
+                vertex_bytes.len() as u64,
+                BufferUsage::VERTEX | BufferUsage::TRANSFER_DST,
+                "game.sky.fullscreen-triangle",
+            )
+            .device_local(),
+        ) {
             Ok(handle) => handle,
             Err(error) => {
                 let _ = runtime.destroy_material(material);

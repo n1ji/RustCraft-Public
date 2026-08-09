@@ -95,6 +95,18 @@ impl BitOrAssign for BufferUsage {
 /// prefer `BufferUsage`.
 pub type BufferUsages = BufferUsage;
 
+/// Selects where a buffer is intended to live.
+///
+/// Upload buffers are CPU writable and are useful for data that changes every
+/// frame. Device-local buffers are optimized for GPU reads; backends stage
+/// their initial data through a temporary upload resource.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum BufferMemory {
+    #[default]
+    Upload,
+    DeviceLocal,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TextureUsage(pub u32);
 
@@ -372,6 +384,7 @@ pub use super::shader::{
 pub struct BufferDesc {
     pub size: u64,
     pub usage: BufferUsage,
+    pub memory: BufferMemory,
     pub label: String,
 }
 
@@ -380,12 +393,22 @@ impl BufferDesc {
         Self {
             size,
             usage,
+            memory: BufferMemory::Upload,
             label: label.into(),
         }
     }
 
     pub fn unlabeled(size: u64, usage: BufferUsage) -> Self {
         Self::new(size, usage, "buffer")
+    }
+
+    pub fn with_memory(mut self, memory: BufferMemory) -> Self {
+        self.memory = memory;
+        self
+    }
+
+    pub fn device_local(self) -> Self {
+        self.with_memory(BufferMemory::DeviceLocal)
     }
 }
 

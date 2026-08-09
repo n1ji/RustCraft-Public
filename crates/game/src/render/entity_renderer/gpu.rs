@@ -19,11 +19,14 @@ impl EntityRenderer {
         first_person_pipeline: PipelineHandle,
     ) -> RhiResult<()> {
         self.destroy_gpu(runtime);
-        let uniform_buffer = runtime.create_buffer(BufferDesc::new(
-            std::mem::size_of::<WorldUniforms>() as u64,
-            BufferUsage::UNIFORM | BufferUsage::TRANSFER_DST,
-            "game.entity.uniforms",
-        ))?;
+        let uniform_buffer = runtime.create_buffer(
+            BufferDesc::new(
+                std::mem::size_of::<WorldUniforms>() as u64,
+                BufferUsage::UNIFORM | BufferUsage::TRANSFER_DST,
+                "game.entity.uniforms",
+            )
+            .device_local(),
+        )?;
         let sampler = match runtime.create_sampler(SamplerDesc {
             // Entity and skin atlases are also pixel art. Nearest filtering
             // keeps skin texels and transparent borders crisp at any distance.
@@ -242,11 +245,14 @@ impl EntityRenderer {
         let block_texture = self.block_texture;
         let item_texture = self.item_texture;
 
-        let uniform_buffer = runtime.create_buffer(BufferDesc::new(
-            std::mem::size_of::<WorldUniforms>() as u64,
-            BufferUsage::UNIFORM | BufferUsage::TRANSFER_DST,
-            "game.entity.first-person-uniforms",
-        ))?;
+        let uniform_buffer = runtime.create_buffer(
+            BufferDesc::new(
+                std::mem::size_of::<WorldUniforms>() as u64,
+                BufferUsage::UNIFORM | BufferUsage::TRANSFER_DST,
+                "game.entity.first-person-uniforms",
+            )
+            .device_local(),
+        )?;
         let (bind_group, material) = match Self::create_optional_texture_material(
             runtime,
             pipeline,

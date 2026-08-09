@@ -24,12 +24,17 @@ pub(crate) struct DirectX12CommandEncoder {
     commands: Vec<Command>,
     render_pass_open: bool,
     pipeline_bound: Option<PipelineHandle>,
+    deferred_buffers: Vec<NativeBuffer>,
 }
 
 pub(crate) fn create_command_encoder(
-    backend: &DirectX12Backend,
+    backend: &mut DirectX12Backend,
     label: &str,
 ) -> RhiResult<Box<dyn CommandEncoder>> {
+    let pending_uploads = {
+        let native = backend.native_mut()?;
+        std::mem::take(&mut native.pending_buffer_uploads)
+    };
     let native = backend.native_ref()?;
     let allocator = unsafe {
         native
@@ -48,7 +53,7 @@ pub(crate) fn create_command_encoder(
             )
             .map_err(|error| backend_error("create Direct3D 12 command list", error))?
     };
-    Ok(Box::new(DirectX12CommandEncoder {
+    let mut encoder = DirectX12CommandEncoder {
         allocator,
         command_list,
         resource_heap: native.resource_heap.clone(),
@@ -61,7 +66,12 @@ pub(crate) fn create_command_encoder(
         commands: Vec::new(),
         render_pass_open: false,
         pipeline_bound: None,
-    }))
+        deferred_buffers: Vec::new(),
+    };
+    for upload in pending_uploads {
+        encoder.record_pending_buffer_upload(upload)?;
+    }
+    Ok(Box::new(encoder))
 }
 
 impl DirectX12CommandEncoder {
@@ -171,6 +181,68 @@ impl DirectX12CommandEncoder {
                 Some(self.sampler_heap.heap.clone()),
             ]);
         }
+    }
+
+    fn record_pending_buffer_upload(
+        &mut self,
+        upload: context::PendingBufferUpload,
+    ) -> RhiResult<()> {
+        let destination = self.resource_buffer(upload.destination)?.clone();
+        let destination_end = upload
+            .destination_offset
+            .checked_add(upload.size)
+            .ok_or(RhiError::InvalidDescription("buffer upload range overflow"))?;
+        if upload.size == 0 || destination_end > destination.size {
+            return Err(RhiError::InvalidDescription(
+                "buffer upload exceeds the destination buffer",
+            ));
+        }
+        self.transition(
+            ResourceHandle::Buffer(upload.destination),
+            ResourceState::Undefined,
+            ResourceState::CopyDst,
+        )?;
+        unsafe {
+            self.command_list.CopyBufferRegion(
+                &destination.resource,
+                upload.destination_offset,
+                &upload.staging.resource,
+                0,
+                upload.size,
+            );
+        }
+        let destination_state = if destination.usage.contains(BufferUsage::INDEX) {
+            ResourceState::IndexBuffer
+        } else if destination.usage.contains(BufferUsage::VERTEX) {
+            ResourceState::VertexBuffer
+        } else if destination.usage.contains(BufferUsage::UNIFORM) {
+            ResourceState::UniformBuffer
+        } else if destination.usage.contains(BufferUsage::STORAGE) {
+            ResourceState::StorageRead
+        } else {
+            ResourceState::CopyDst
+        };
+        self.transition(
+            ResourceHandle::Buffer(upload.destination),
+            ResourceState::CopyDst,
+            destination_state,
+        )?;
+        self.commands.push(Command::CopyBuffer {
+            source: upload.staging_handle,
+            destination: upload.destination,
+            source_offset: 0,
+            destination_offset: upload.destination_offset,
+            size: upload.size,
+        });
+        if destination_state != ResourceState::CopyDst {
+            self.commands.push(Command::Barrier(ResourceBarrier {
+                resource: ResourceHandle::Buffer(upload.destination),
+                before: ResourceState::CopyDst,
+                after: destination_state,
+            }));
+        }
+        self.deferred_buffers.push(upload.staging);
+        Ok(())
     }
 
     fn clear_color(&self, texture: &NativeTexture, clear: ClearValue) -> RhiResult<()> {
@@ -331,6 +403,89 @@ impl CommandEncoder for DirectX12CommandEncoder {
             source,
             destination,
         });
+        Ok(())
+    }
+
+    fn copy_buffer(
+        &mut self,
+        source: BufferHandle,
+        destination: BufferHandle,
+        source_offset: u64,
+        destination_offset: u64,
+        size: u64,
+    ) -> RhiResult<()> {
+        self.require_no_render_pass()?;
+        let source_resource = self.resource_buffer(source)?.clone();
+        let destination_resource = self.resource_buffer(destination)?.clone();
+        let source_end = source_offset
+            .checked_add(size)
+            .ok_or(RhiError::InvalidDescription("buffer copy range overflow"))?;
+        let destination_end = destination_offset
+            .checked_add(size)
+            .ok_or(RhiError::InvalidDescription("buffer copy range overflow"))?;
+        if size == 0
+            || source_end > source_resource.size
+            || destination_end > destination_resource.size
+        {
+            return Err(RhiError::InvalidDescription(
+                "buffer copy range exceeds a buffer",
+            ));
+        }
+
+        // Upload heaps begin in GENERIC_READ, while device-local resources
+        // begin in COPY_DEST. Make the copy states explicit before issuing the
+        // region copy; the staging resource is retired only after the queue is
+        // idle by the caller.
+        self.transition(
+            ResourceHandle::Buffer(source),
+            ResourceState::Undefined,
+            ResourceState::CopySrc,
+        )?;
+        self.transition(
+            ResourceHandle::Buffer(destination),
+            ResourceState::Undefined,
+            ResourceState::CopyDst,
+        )?;
+        unsafe {
+            self.command_list.CopyBufferRegion(
+                &destination_resource.resource,
+                destination_offset,
+                &source_resource.resource,
+                source_offset,
+                size,
+            );
+        }
+
+        let destination_state = if destination_resource.usage.contains(BufferUsage::INDEX) {
+            ResourceState::IndexBuffer
+        } else if destination_resource.usage.contains(BufferUsage::VERTEX) {
+            ResourceState::VertexBuffer
+        } else if destination_resource.usage.contains(BufferUsage::UNIFORM) {
+            ResourceState::UniformBuffer
+        } else if destination_resource.usage.contains(BufferUsage::STORAGE) {
+            ResourceState::StorageRead
+        } else {
+            ResourceState::CopyDst
+        };
+        self.transition(
+            ResourceHandle::Buffer(destination),
+            ResourceState::CopyDst,
+            destination_state,
+        )?;
+        self.commands.push(Command::CopyBuffer {
+            source,
+            destination,
+            source_offset,
+            destination_offset,
+            size,
+        });
+        if destination_state != ResourceState::CopyDst {
+            self.commands.push(Command::Barrier(ResourceBarrier {
+                resource: ResourceHandle::Buffer(destination),
+                before: ResourceState::CopyDst,
+                after: destination_state,
+            }));
+        }
         Ok(())
     }
 
@@ -633,6 +788,7 @@ impl CommandEncoder for DirectX12CommandEncoder {
         let submission = Box::new(context::NativeSubmission {
             _allocator: self.allocator,
             command_list: self.command_list,
+            _deferred_buffers: self.deferred_buffers,
         });
         let token = Box::into_raw(submission) as usize as u64;
         Ok(CommandBuffer::with_native(

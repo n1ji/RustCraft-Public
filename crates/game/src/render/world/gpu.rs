@@ -1,19 +1,23 @@
+use std::collections::BTreeMap;
+
 use nalgebra::Matrix4;
 
 use renderer_api::core::{MaterialDesc, RendererRuntime, SkyGradient};
 use renderer_api::rhi::device::RenderDevice;
 use renderer_api::rhi::types::{
-    BindGroupDesc, BindGroupEntry, BindGroupHandle, BindingResource, BufferDesc, BufferUsage,
-    Extent2D, MaterialHandle, PipelineHandle, RhiResult, SamplerDesc, SamplerHandle, TextureDesc,
-    TextureFormat, TextureHandle, TextureUsage,
+    BindGroupDesc, BindGroupEntry, BindGroupHandle, BindingResource, BufferDesc, BufferMemory,
+    BufferUsage, Extent2D, MaterialHandle, PipelineHandle, RhiResult, SamplerDesc, SamplerHandle,
+    TextureDesc, TextureFormat, TextureHandle, TextureUsage,
 };
 
 use crate::client::player::Camera;
-use crate::render::mesh::destroy_mesh;
+use crate::render::mesh::{destroy_mesh, upload_mesh_with_bind_group_memory};
 
-use super::state::chunk_center;
+use super::state::WorldBatch;
 use super::types::WorldGpuState;
-use super::{chunk_push_constants, matrix_array, WorldRenderer, WorldUniforms};
+use super::{matrix_array, WorldRenderer, WorldUniforms};
+
+const CHUNK_BATCH_SIDE: i32 = 4;
 
 impl WorldRenderer {
     /// Create the basic world material and its RHI resources. The concrete
@@ -27,11 +31,14 @@ impl WorldRenderer {
     ) -> RhiResult<()> {
         self.destroy_gpu(runtime);
 
-        let uniform_buffer = runtime.create_buffer(BufferDesc::new(
-            std::mem::size_of::<WorldUniforms>() as u64,
-            BufferUsage::UNIFORM | BufferUsage::TRANSFER_DST,
-            "game.world.uniforms",
-        ))?;
+        let uniform_buffer = runtime.create_buffer(
+            BufferDesc::new(
+                std::mem::size_of::<WorldUniforms>() as u64,
+                BufferUsage::UNIFORM | BufferUsage::TRANSFER_DST,
+                "game.world.uniforms",
+            )
+            .device_local(),
+        )?;
         let sampler = match runtime.create_sampler(SamplerDesc {
             linear_filter: false,
             repeat_u: true,
@@ -179,6 +186,11 @@ impl WorldRenderer {
     }
 
     pub fn destroy_gpu<D: RenderDevice>(&mut self, runtime: &mut RendererRuntime<D>) {
+        for batch in self.batches.drain(..) {
+            destroy_world_batch(runtime, batch);
+        }
+        self.batch_visible.clear();
+        self.batch_transparent_sort_keys.clear();
         for draw in self.draws.drain(..) {
             let _ = destroy_mesh(runtime, draw);
         }
@@ -352,112 +364,208 @@ impl WorldRenderer {
 
         let generation = self.mesh_generation;
         if generation == gpu.uploaded_generation {
-            // Transparent chunk ordering depends on the camera, not on mesh
-            // generation. Keep the buffers intact and update only sort keys
-            // and the cheap resident-chunk visibility mask.
-            self.update_visible_draws(camera);
-            self.update_transparent_sort_keys(camera);
+            // Keep the resident GPU batches intact and update only their
+            // cheap group-level visibility and transparent sort keys.
+            self.update_spatial_caches(camera);
             return Ok(());
         }
 
-        if self.force_full_gpu_upload || gpu.uploaded_generation == u64::MAX {
-            self.rebuild_all_chunk_draws(runtime, gpu)?;
-            self.force_full_gpu_upload = false;
-            self.pending_gpu_updates.clear();
-        } else {
-            self.upload_changed_chunk_draws(runtime, gpu)?;
-        }
-        self.update_visible_draws(camera);
-        self.update_transparent_sort_keys(camera);
+        // Rebuild coarse batches when the resident chunk set changes. This is
+        // intentionally one upload per batch instead of one buffer/draw per
+        // chunk; steady-state frames then submit only a handful of packets.
+        self.rebuild_chunk_batches(runtime, gpu)?;
+        self.force_full_gpu_upload = false;
+        self.pending_gpu_updates.clear();
+        self.update_spatial_caches(camera);
         gpu.uploaded_generation = generation;
         Ok(())
     }
 
-    fn rebuild_all_chunk_draws<D: RenderDevice>(
+    fn rebuild_chunk_batches<D: RenderDevice>(
         &mut self,
         runtime: &mut RendererRuntime<D>,
         gpu: &WorldGpuState,
     ) -> RhiResult<()> {
-        let mut new_draws = Vec::new();
-        let mut new_positions = Vec::new();
-        let mut new_centers = Vec::new();
-        let mut new_transparent_ranges = Vec::new();
-        for mesh in &self.meshes {
-            let Some((draw, transparent_start, center)) = upload_chunk_draw(runtime, gpu, mesh)?
-            else {
-                continue;
-            };
-            new_draws.push(draw);
-            new_positions.push(Some((mesh.cx, mesh.cz)));
-            new_centers.push(Some(center));
-            new_transparent_ranges.push(transparent_start);
-        }
+        let old_batches = std::mem::take(&mut self.batches);
+        self.batch_visible.clear();
+        self.batch_transparent_sort_keys.clear();
+        self.visible_camera_key = None;
+        self.transparent_sort_camera_key = None;
+        destroy_world_batches(runtime, old_batches);
 
-        let old_draws = std::mem::replace(&mut self.draws, new_draws);
-        self.draw_positions = new_positions;
-        self.draw_centers = new_centers;
-        self.transparent_ranges = new_transparent_ranges;
-        self.transparent_sort_keys
-            .resize(self.draws.len(), u64::MAX);
-        self.visible_draws.resize(self.draws.len(), true);
-        for draw in old_draws {
+        // Keep the old manually supplied path from retaining a second copy of
+        // the chunk geometry once the chunk stream is active.
+        for draw in self.draws.drain(..) {
             let _ = destroy_mesh(runtime, draw);
         }
+        self.draw_positions.clear();
+        self.draw_centers.clear();
+        self.transparent_ranges.clear();
+        self.transparent_sort_keys.clear();
+        self.visible_draws.clear();
+        self.visible_indices.clear();
+
+        let mut groups: BTreeMap<(i32, i32), Vec<&crate::world::mesh::ChunkMesh>> = BTreeMap::new();
+        for mesh in &self.meshes {
+            groups
+                .entry((
+                    mesh.cx.div_euclid(CHUNK_BATCH_SIDE),
+                    mesh.cz.div_euclid(CHUNK_BATCH_SIDE),
+                ))
+                .or_default()
+                .push(mesh);
+        }
+
+        let mut new_batches = Vec::with_capacity(groups.len());
+        for ((group_x, group_z), meshes) in groups {
+            let mut vertices = Vec::new();
+            let mut opaque_indices = Vec::new();
+            let mut transparent_indices = Vec::new();
+            for mesh in meshes {
+                let base_vertex = u32::try_from(vertices.len()).map_err(|_| {
+                    renderer_api::rhi::types::RhiError::InvalidDescription(
+                        "chunk batch has too many vertices",
+                    )
+                })?;
+                let origin_x = (mesh.cx * 16) as f32;
+                let origin_z = (mesh.cz * 16) as f32;
+                vertices.extend(mesh.vertices.iter().map(|vertex| {
+                    let mut world_vertex = *vertex;
+                    world_vertex.pos[0] += origin_x;
+                    world_vertex.pos[2] += origin_z;
+                    world_vertex
+                }));
+
+                let transparent_start = usize::try_from(mesh.transparent_start)
+                    .unwrap_or(usize::MAX)
+                    .min(mesh.indices.len());
+                for &index in &mesh.indices[..transparent_start] {
+                    opaque_indices.push(base_vertex.checked_add(index).ok_or(
+                        renderer_api::rhi::types::RhiError::InvalidDescription(
+                            "chunk batch index overflow",
+                        ),
+                    )?);
+                }
+                for &index in &mesh.indices[transparent_start..] {
+                    transparent_indices.push(base_vertex.checked_add(index).ok_or(
+                        renderer_api::rhi::types::RhiError::InvalidDescription(
+                            "chunk batch index overflow",
+                        ),
+                    )?);
+                }
+            }
+
+            let opaque_index_count = u32::try_from(opaque_indices.len()).map_err(|_| {
+                renderer_api::rhi::types::RhiError::InvalidDescription(
+                    "chunk batch has too many opaque indices",
+                )
+            })?;
+            let transparent_index_count =
+                u32::try_from(transparent_indices.len()).map_err(|_| {
+                    renderer_api::rhi::types::RhiError::InvalidDescription(
+                        "chunk batch has too many transparent indices",
+                    )
+                })?;
+            if opaque_index_count == 0 && transparent_index_count == 0 {
+                continue;
+            }
+            let transparent_first_index = opaque_index_count;
+            opaque_indices.extend(transparent_indices);
+            let draw = match upload_mesh_with_bind_group_memory(
+                runtime,
+                gpu.pipeline,
+                Some(gpu.bind_group),
+                bytemuck::cast_slice(&vertices),
+                &opaque_indices,
+                &format!("game.chunk-batch.{group_x}.{group_z}"),
+                BufferMemory::DeviceLocal,
+            ) {
+                Ok(draw) => draw,
+                Err(error) => {
+                    destroy_world_batches(runtime, new_batches);
+                    return Err(error);
+                }
+            };
+            let Some(index_buffer) = draw.index_buffer else {
+                let _ = runtime.destroy_buffer(draw.vertex_buffer);
+                destroy_world_batches(runtime, new_batches);
+                return Err(renderer_api::rhi::types::RhiError::Backend(String::from(
+                    "chunk batch upload did not create an index buffer",
+                )));
+            };
+            let min_x = (group_x * CHUNK_BATCH_SIDE * 16) as f32;
+            let min_z = (group_z * CHUNK_BATCH_SIDE * 16) as f32;
+            new_batches.push(WorldBatch {
+                vertex_buffer: draw.vertex_buffer,
+                index_buffer,
+                opaque_index_count,
+                transparent_first_index,
+                transparent_index_count,
+                aabb_min: [min_x, 0.0, min_z],
+                aabb_max: [
+                    min_x + (CHUNK_BATCH_SIDE * 16) as f32,
+                    256.0,
+                    min_z + (CHUNK_BATCH_SIDE * 16) as f32,
+                ],
+            });
+        }
+        self.batch_visible.resize(new_batches.len(), true);
+        self.batch_transparent_sort_keys
+            .resize(new_batches.len(), u64::MAX);
+        self.batches = new_batches;
         Ok(())
     }
 
-    fn upload_changed_chunk_draws<D: RenderDevice>(
-        &mut self,
-        runtime: &mut RendererRuntime<D>,
-        gpu: &WorldGpuState,
-    ) -> RhiResult<()> {
-        let updates = self.pending_gpu_updates.iter().copied().collect::<Vec<_>>();
-        for position in updates {
-            // Allocate the replacement first. If allocation/upload fails, the
-            // old draw remains valid and this coordinate stays queued to retry.
-            let replacement = self
-                .meshes
-                .iter()
-                .find(|mesh| (mesh.cx, mesh.cz) == position)
-                .map(|mesh| upload_chunk_draw(runtime, gpu, mesh))
-                .transpose()?
-                .flatten();
-            let old_index = self
-                .draw_positions
-                .iter()
-                .position(|draw_position| *draw_position == Some(position));
-
-            match (old_index, replacement) {
-                (Some(index), Some((draw, transparent_start, center))) => {
-                    let old = std::mem::replace(&mut self.draws[index], draw);
-                    self.draw_positions[index] = Some(position);
-                    self.draw_centers[index] = Some(center);
-                    self.transparent_ranges[index] = transparent_start;
-                    self.transparent_sort_keys[index] = u64::MAX;
-                    let _ = destroy_mesh(runtime, old);
-                }
-                (Some(index), None) => {
-                    let old = self.draws.swap_remove(index);
-                    self.draw_positions.swap_remove(index);
-                    self.draw_centers.swap_remove(index);
-                    self.transparent_ranges.swap_remove(index);
-                    self.transparent_sort_keys.swap_remove(index);
-                    self.visible_draws.swap_remove(index);
-                    let _ = destroy_mesh(runtime, old);
-                }
-                (None, Some((draw, transparent_start, center))) => {
-                    self.draws.push(draw);
-                    self.draw_positions.push(Some(position));
-                    self.draw_centers.push(Some(center));
-                    self.transparent_ranges.push(transparent_start);
-                    self.transparent_sort_keys.push(u64::MAX);
-                    self.visible_draws.push(true);
-                }
-                (None, None) => {}
-            }
-            self.pending_gpu_updates.remove(&position);
+    fn update_spatial_caches(&mut self, camera: &Camera) {
+        if self.batches.is_empty() {
+            self.update_visible_draws(camera);
+            self.update_transparent_sort_keys(camera);
+        } else {
+            self.update_visible_batches(camera);
+            self.update_batch_transparent_sort_keys(camera);
         }
-        Ok(())
+    }
+
+    fn update_visible_batches(&mut self, camera: &Camera) {
+        let key = visibility_camera_key(camera);
+        if self.visible_camera_key == Some(key) && self.batch_visible.len() == self.batches.len() {
+            return;
+        }
+        self.batch_visible.resize(self.batches.len(), true);
+        let frustum = camera.frustum();
+        for (visible, batch) in self.batch_visible.iter_mut().zip(&self.batches) {
+            *visible = frustum.test_aabb(batch.aabb_min, batch.aabb_max);
+        }
+        self.visible_camera_key = Some(key);
+        self.visible_indices.clear();
+    }
+
+    fn update_batch_transparent_sort_keys(&mut self, camera: &Camera) {
+        let key = [
+            quantize_camera_position(camera.position.x),
+            quantize_camera_position(camera.position.y),
+            quantize_camera_position(camera.position.z),
+        ];
+        if self.transparent_sort_camera_key == Some(key)
+            && self.batch_transparent_sort_keys.len() == self.batches.len()
+        {
+            return;
+        }
+        self.batch_transparent_sort_keys
+            .resize(self.batches.len(), u64::MAX);
+        for (sort_key, batch) in self
+            .batch_transparent_sort_keys
+            .iter_mut()
+            .zip(&self.batches)
+        {
+            let center = [
+                (batch.aabb_min[0] + batch.aabb_max[0]) * 0.5,
+                (batch.aabb_min[1] + batch.aabb_max[1]) * 0.5,
+                (batch.aabb_min[2] + batch.aabb_max[2]) * 0.5,
+            ];
+            *sort_key = transparent_sort_key(center, camera);
+        }
+        self.transparent_sort_camera_key = Some(key);
     }
 
     fn update_transparent_sort_keys(&mut self, camera: &Camera) {
@@ -529,28 +637,6 @@ fn visibility_camera_key(camera: &Camera) -> [i32; 9] {
     ]
 }
 
-fn upload_chunk_draw<D: RenderDevice>(
-    runtime: &mut RendererRuntime<D>,
-    gpu: &WorldGpuState,
-    mesh: &crate::world::mesh::ChunkMesh,
-) -> RhiResult<Option<(crate::render::MeshDraw, u32, [f32; 3])>> {
-    let Some(mut draw) = crate::render::mesh::upload_chunk_mesh(
-        runtime,
-        gpu.pipeline,
-        Some(gpu.bind_group),
-        mesh,
-        &format!("game.chunk.{}.{}", mesh.cx, mesh.cz),
-    )?
-    else {
-        return Ok(None);
-    };
-    draw.material = Some(gpu.material);
-    draw.push_constants = Some(chunk_push_constants(mesh));
-    draw.sort_key = (((mesh.cx as i64 as u64) << 32) ^ mesh.cz as i64 as u64).wrapping_add(1);
-    let transparent_start = mesh.transparent_start.min(draw.index_count);
-    Ok(Some((draw, transparent_start, chunk_center(mesh))))
-}
-
 fn transparent_sort_key(center: [f32; 3], camera: &Camera) -> u64 {
     // Include height: stacked transparent geometry in tall maps otherwise
     // receives identical ordering whenever its chunks share X/Z. Squared
@@ -560,4 +646,18 @@ fn transparent_sort_key(center: [f32; 3], camera: &Camera) -> u64 {
     let dz = camera.position.z - center[2];
     let distance_squared = (dx * dx + dy * dy + dz * dz).min(1_000_000_000_000.0);
     u64::MAX - (distance_squared * 1024.0) as u64
+}
+
+fn destroy_world_batch<D: RenderDevice>(runtime: &mut RendererRuntime<D>, batch: WorldBatch) {
+    let _ = runtime.destroy_buffer(batch.vertex_buffer);
+    let _ = runtime.destroy_buffer(batch.index_buffer);
+}
+
+fn destroy_world_batches<D: RenderDevice>(
+    runtime: &mut RendererRuntime<D>,
+    batches: Vec<WorldBatch>,
+) {
+    for batch in batches {
+        destroy_world_batch(runtime, batch);
+    }
 }

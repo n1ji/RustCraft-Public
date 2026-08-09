@@ -520,7 +520,8 @@ fn create_gui_buffer<D: RenderDevice>(
     usage: BufferUsage,
     label: &str,
 ) -> RhiResult<BufferHandle> {
-    let handle = runtime.create_buffer(BufferDesc::new(bytes.len() as u64, usage, label))?;
+    let handle =
+        runtime.create_buffer(BufferDesc::new(bytes.len() as u64, usage, label).device_local())?;
     if let Err(error) = runtime.device().upload_buffer(handle, 0, bytes) {
         let _ = runtime.destroy_buffer(handle);
         return Err(error);
@@ -546,11 +547,14 @@ impl GuiRenderer {
         self.font.preload_ascii();
 
         let uniform_size = std::mem::size_of::<crate::render::gui::GuiUniforms>() as u64;
-        let uniform_buffer = runtime.create_buffer(BufferDesc::new(
-            uniform_size,
-            BufferUsage::UNIFORM | BufferUsage::TRANSFER_DST,
-            "game.gui.uniforms",
-        ))?;
+        let uniform_buffer = runtime.create_buffer(
+            BufferDesc::new(
+                uniform_size,
+                BufferUsage::UNIFORM | BufferUsage::TRANSFER_DST,
+                "game.gui.uniforms",
+            )
+            .device_local(),
+        )?;
         if let Err(error) = self.upload_uniform(runtime, uniform_buffer, [0, 0]) {
             let _ = runtime.destroy_buffer(uniform_buffer);
             return Err(error);

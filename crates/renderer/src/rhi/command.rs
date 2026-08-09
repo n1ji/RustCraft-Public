@@ -76,6 +76,13 @@ pub enum Command {
         source: TextureHandle,
         destination: TextureHandle,
     },
+    CopyBuffer {
+        source: BufferHandle,
+        destination: BufferHandle,
+        source_offset: u64,
+        destination_offset: u64,
+        size: u64,
+    },
     BlitTexture {
         source: TextureHandle,
         destination: TextureHandle,
@@ -159,6 +166,14 @@ pub trait CommandEncoder: Send {
     /// the destination to `CopyDst` before issuing the copy, then restoring
     /// the states required by subsequent work.
     fn copy_texture(&mut self, source: TextureHandle, destination: TextureHandle) -> RhiResult<()>;
+    fn copy_buffer(
+        &mut self,
+        source: BufferHandle,
+        destination: BufferHandle,
+        source_offset: u64,
+        destination_offset: u64,
+        size: u64,
+    ) -> RhiResult<()>;
     /// Copy a color texture while allowing the backend to scale and convert
     /// between compatible color formats. This is the RHI fallback used by the
     /// core tone-mapping boundary until a real post-process pipeline is bound.
@@ -292,6 +307,33 @@ impl CommandEncoder for RecordingCommandEncoder {
         self.commands.push(Command::BlitTexture {
             source,
             destination,
+        });
+        Ok(())
+    }
+
+    fn copy_buffer(
+        &mut self,
+        source: BufferHandle,
+        destination: BufferHandle,
+        source_offset: u64,
+        destination_offset: u64,
+        size: u64,
+    ) -> RhiResult<()> {
+        self.require_no_render_pass()?;
+        if !source.is_valid() || !destination.is_valid() {
+            return Err(RhiError::InvalidHandle);
+        }
+        if size == 0 {
+            return Err(RhiError::InvalidDescription(
+                "buffer copy size must be non-zero",
+            ));
+        }
+        self.commands.push(Command::CopyBuffer {
+            source,
+            destination,
+            source_offset,
+            destination_offset,
+            size,
         });
         Ok(())
     }
