@@ -245,6 +245,9 @@ name = "ash"
 version = "0.38.0+1.3.281"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bb44936d800fea8f016d7f2311c6a4f97aebd5dc86f09906139ec848cf3a46f"
+dependencies = [
+ "libloading",
+]
 
 [[package]]
 name = "ash-window"
@@ -3426,12 +3429,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustcraft"
-version = "0.1.0"
+name = "rustcraft-game"
+version = "1.0.0"
 dependencies = [
  "aes",
- "ash",
- "ash-window",
  "base64",
  "bytemuck",
  "embed-resource",
@@ -3440,24 +3441,52 @@ dependencies = [
  "fnv",
  "fontdue",
  "gilrs",
- "gpu-allocator",
  "image",
+ "libloading",
  "log",
  "mlua",
  "nalgebra",
  "rand 0.8.6",
- "raw-window-handle",
  "rayon",
  "reqwest",
  "rodio",
  "rsa",
+ "rustcraft-renderer",
+ "rustcraft-renderer-dx12",
+ "rustcraft-renderer-vulkan",
  "serde",
  "serde_json",
  "sha1",
  "sha2",
- "shaderc",
  "winit",
  "zip",
+]
+
+[[package]]
+name = "rustcraft-renderer"
+version = "0.1.0"
+
+[[package]]
+name = "rustcraft-renderer-dx12"
+version = "0.1.0"
+dependencies = [
+ "raw-window-handle",
+ "rustcraft-renderer",
+ "shaderc",
+ "spirv_cross",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "rustcraft-renderer-vulkan"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "ash-window",
+ "gpu-allocator",
+ "raw-window-handle",
+ "rustcraft-renderer",
+ "shaderc",
 ]
 
 [[package]]
@@ -3858,6 +3887,17 @@ name = "spin"
 version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+
+[[package]]
+name = "spirv_cross"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60647fadbf83c4a72f0d7ea67a7ca3a81835cf442b8deae5c134c3e0055b2e14"
+dependencies = [
+ "cc",
+ "js-sys",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "spki"

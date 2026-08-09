@@ -1,0 +1,58 @@
+use std::collections::HashMap;
+
+use crate::client::app::ResourcePackInfo;
+use crate::render::scene::{ModConfigRow, ModManagerRow, ServerListRow, ShaderOptionRow};
+
+#[derive(Clone, Debug, Default)]
+pub struct ScreenRenderer {
+    pub(super) draws: Vec<super::super::MeshDraw>,
+    pub server_address: String,
+    pub username: String,
+    pub account_name: String,
+    pub account_status: String,
+    pub account_list: Vec<(String, String, bool)>,
+    pub account_faces: HashMap<String, [[u8; 4]; 64]>,
+    pub selected_account: usize,
+    pub entering_offline_name: bool,
+    pub offline_username_input: String,
+    pub connection_status: String,
+    pub server_refreshing: bool,
+    pub server_list: Vec<ServerListRow>,
+    /// Raw favicon sources are kept only as a change detector. Decoding PNG
+    /// data belongs to the update path, not to every render-state sync.
+    pub server_favicon_sources: Vec<Option<String>>,
+    pub selected_server: usize,
+    pub server_list_scroll: usize,
+    pub controls_list_scroll: usize,
+    pub available_resource_pack_scroll: usize,
+    pub selected_resource_pack_scroll: usize,
+    pub shader_pack_scroll: usize,
+    pub server_editor_name: String,
+    pub server_editor_address: String,
+    pub server_editor_address_focused: bool,
+    pub modding_rows: Vec<ModManagerRow>,
+    pub modding_scroll: usize,
+    pub modding_status: String,
+    pub modding_connection_active: bool,
+    pub modding_selected: usize,
+    pub mod_config_title: Option<String>,
+    pub mod_config_rows: Vec<ModConfigRow>,
+    pub mod_config_selected: usize,
+    pub mod_config_scroll: usize,
+    pub mod_config_status: String,
+    pub mod_config_locked: bool,
+    pub shader_option_title: String,
+    pub shader_option_rows: Vec<ShaderOptionRow>,
+    pub shader_option_scroll: usize,
+    pub shader_option_status: String,
+    pub server_brand: Option<String>,
+    pub resource_pack_status: Option<String>,
+    pub available_resource_packs: Vec<ResourcePackInfo>,
+    pub selected_resource_packs: Vec<ResourcePackInfo>,
+    pub shader_packs: Vec<crate::render::shader_pack::ShaderPackInfo>,
+    pub selected_shader_pack: Option<String>,
+    pub shader_pack_status: String,
+    pub shader_pack_loading: bool,
+    pub shader_pack_loading_name: String,
+    pub shader_pack_loading_stage: String,
+}

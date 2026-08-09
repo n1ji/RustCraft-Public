@@ -1,0 +1,152 @@
+use renderer_api::core::SkyEnvironment;
+use renderer_api::rhi::types::{
+    BindGroupHandle, BufferHandle, MaterialHandle, PipelineHandle, SamplerHandle, TextureHandle,
+};
+
+use crate::assets::skin::{PlayerSkin, SkinPreviewPixels};
+use crate::client::player::Camera;
+use crate::render::entity::atlas::EntityTextureAtlas;
+use crate::render::scene::{ChestRenderEntry, EntityBillboard, SkullRenderEntry};
+use crate::render::skin::PendingPlayerSkin;
+use crate::render::MeshDraw;
+
+#[derive(Debug)]
+pub(super) struct EntityGpuState {
+    pub(super) pipeline: PipelineHandle,
+    pub(super) transparent_pipeline: PipelineHandle,
+    pub(super) first_person_pipeline: PipelineHandle,
+    pub(super) uniform_buffer: BufferHandle,
+    pub(super) sampler: SamplerHandle,
+    pub(super) fallback_texture: Option<TextureHandle>,
+    pub(super) bound_texture: TextureHandle,
+    pub(super) bind_group: BindGroupHandle,
+    pub(super) material: MaterialHandle,
+    pub(super) transparent_bind_group: BindGroupHandle,
+    pub(super) transparent_material: MaterialHandle,
+    pub(super) first_person_uniform_buffer: Option<BufferHandle>,
+    pub(super) first_person_bind_group: Option<BindGroupHandle>,
+    pub(super) first_person_material: Option<MaterialHandle>,
+    pub(super) block_bind_group: Option<BindGroupHandle>,
+    pub(super) block_material: Option<MaterialHandle>,
+    pub(super) first_person_block_bind_group: Option<BindGroupHandle>,
+    pub(super) first_person_block_material: Option<MaterialHandle>,
+    pub(super) item_bind_group: Option<BindGroupHandle>,
+    pub(super) item_material: Option<MaterialHandle>,
+    pub(super) first_person_item_bind_group: Option<BindGroupHandle>,
+    pub(super) first_person_item_material: Option<MaterialHandle>,
+}
+
+#[derive(Debug)]
+pub struct EntityRenderer {
+    pub(super) draws: Vec<MeshDraw>,
+    pub(super) scene_draw: Option<MeshDraw>,
+    /// Third-person local player geometry is animated at redraw frequency.
+    /// Keep it out of the static entity batch so interpolation never forces
+    /// every remote entity to be rebuilt and uploaded again.
+    pub(super) local_scene_draw: Option<MeshDraw>,
+    pub(super) scene_item_draw: Option<MeshDraw>,
+    pub(super) particle_draw: Option<MeshDraw>,
+    pub(super) block_overlay_draw: Option<MeshDraw>,
+    pub(super) extras_draw: Option<MeshDraw>,
+    pub(super) first_person_arm_draw: Option<MeshDraw>,
+    pub(super) first_person_block_draw: Option<MeshDraw>,
+    pub(super) first_person_item_draw: Option<MeshDraw>,
+    pub(super) uploaded_scene_hash: Option<u64>,
+    pub(super) uploaded_local_scene_hash: Option<u64>,
+    pub(super) uploaded_particle_hash: Option<u64>,
+    pub(super) uploaded_block_overlay_hash: Option<u64>,
+    pub(super) uploaded_extras_hash: Option<u64>,
+    pub(super) uploaded_sign_atlas_hash: Option<u64>,
+    pub(super) uploaded_first_person_hash: Option<u64>,
+    pub(super) model_cache:
+        fnv::FnvHashMap<u64, std::sync::Arc<Vec<crate::render::entity::mesh::ModelCuboid>>>,
+    pub entity_billboards: Vec<EntityBillboard>,
+    pub skull_entries: Vec<SkullRenderEntry>,
+    pub chest_entries: Vec<ChestRenderEntry>,
+    pub sign_entries: Vec<crate::render::scene::SignEntry>,
+    pub pending_player_skins: Vec<PendingPlayerSkin>,
+    pub player_skin_content_hash: u64,
+    pub player_skin_layout_hash: u64,
+    pub entity_state_hash: u64,
+    pub entity_billboard_generation: u64,
+    pub local_model_parts: usize,
+    pub local_skin_size: [u32; 2],
+    pub local_skin_slim: bool,
+    pub local_skin_face: [[u8; 4]; 64],
+    pub local_skin_preview: SkinPreviewPixels,
+    pub local_skin: PlayerSkin,
+    pub local_player_billboard: Option<EntityBillboard>,
+    pub entity_texture: Option<TextureHandle>,
+    pub block_texture: Option<TextureHandle>,
+    pub item_texture: Option<TextureHandle>,
+    pub particles: Vec<crate::client::particles::Particle>,
+    pub particle_generation: u64,
+    pub block_selection_boxes: Vec<crate::client::interaction::SelectionBox>,
+    pub dig_progress: f32,
+    pub dig_position: Option<[i32; 3]>,
+    pub daylight_factor: f32,
+    pub environment: Option<SkyEnvironment>,
+    pub local_skin_upload_pending: bool,
+    pub cape_upload_pending: bool,
+    pub cape_pixels: Option<Vec<u8>>,
+    pub(crate) entity_atlas: Option<EntityTextureAtlas>,
+    pub(crate) synced_player_skin_content_hash: Option<u64>,
+    pub(super) gpu: Option<EntityGpuState>,
+}
+
+impl Default for EntityRenderer {
+    fn default() -> Self {
+        Self {
+            draws: Vec::new(),
+            scene_draw: None,
+            local_scene_draw: None,
+            scene_item_draw: None,
+            particle_draw: None,
+            block_overlay_draw: None,
+            extras_draw: None,
+            first_person_arm_draw: None,
+            first_person_block_draw: None,
+            first_person_item_draw: None,
+            uploaded_scene_hash: None,
+            uploaded_local_scene_hash: None,
+            uploaded_particle_hash: None,
+            uploaded_block_overlay_hash: None,
+            uploaded_extras_hash: None,
+            uploaded_sign_atlas_hash: None,
+            uploaded_first_person_hash: None,
+            model_cache: fnv::FnvHashMap::default(),
+            entity_billboards: Vec::new(),
+            skull_entries: Vec::new(),
+            chest_entries: Vec::new(),
+            sign_entries: Vec::new(),
+            pending_player_skins: Vec::new(),
+            player_skin_content_hash: 0,
+            player_skin_layout_hash: 0,
+            entity_state_hash: 0,
+            entity_billboard_generation: 0,
+            local_model_parts: 0,
+            local_skin_size: [0; 2],
+            local_skin_slim: false,
+            local_skin_face: [[0; 4]; 64],
+            local_skin_preview: SkinPreviewPixels::default(),
+            local_skin: PlayerSkin::default(),
+            local_player_billboard: None,
+            entity_texture: None,
+            block_texture: None,
+            item_texture: None,
+            particles: Vec::new(),
+            particle_generation: 0,
+            block_selection_boxes: Vec::new(),
+            dig_progress: 0.0,
+            dig_position: None,
+            daylight_factor: 1.0,
+            environment: None,
+            local_skin_upload_pending: false,
+            cape_upload_pending: false,
+            cape_pixels: None,
+            entity_atlas: None,
+            synced_player_skin_content_hash: None,
+            gpu: None,
+        }
+    }
+}

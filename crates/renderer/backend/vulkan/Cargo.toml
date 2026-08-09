@@ -1,0 +1,16 @@
+[package]
+name = "rustcraft-renderer-vulkan"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "renderer_vulkan"
+path = "src/lib.rs"
+
+[dependencies]
+renderer = { package = "rustcraft-renderer", path = "../.." }
+ash = { version = "0.38", default-features = false, features = ["loaded"] }
+ash-window = "0.13"
+gpu-allocator = "0.28"
+raw-window-handle = "0.6"
+shaderc = "0.10"
